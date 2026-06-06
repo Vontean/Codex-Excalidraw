@@ -1,5 +1,7 @@
 # Codex Excalidraw
 
+English | [简体中文](README.zh-CN.md)
+
 Local Excalidraw workbench, CLI, and agent skill for Codex and Claude Code.
 
 The goal is not to replace Mermaid. It gives agents a lightweight way to create editable Excalidraw canvases, export PNG/SVG previews, open a local browser workbench, and read back user edits during an implementation conversation.
