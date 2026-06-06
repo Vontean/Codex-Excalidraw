@@ -1,0 +1,219 @@
+{
+  "version": 1,
+  "source": "https://libraries.excalidraw.com/libraries.json",
+  "principles": [
+    "Select libraries from the user's drawing intent, not from a fixed template.",
+    "Use a library when it provides reusable visual language or recognizable components for the scene.",
+    "Prefer sparse, purposeful library use over decorative insertion.",
+    "Keep generated scenes editable; library components are building blocks, not flattened images.",
+    "Record selected library ids in appState.codex.libraries so later read-back can explain why they were used."
+  ],
+  "libraries": [
+    {
+      "id": "basic-ux-wireframing-elements",
+      "name": "Basic UX/wireframing elements",
+      "author": "gabi.macakova",
+      "description": "Basic UX and wireframing controls such as buttons, text boxes, text areas, checkboxes, drop-down menus, toggles, image placeholders, and profile photos.",
+      "path": "libraries/vendor/gabrielamacakova/basic-ux-wireframing-elements.excalidrawlib",
+      "preview": "libraries/previews/basic-ux-wireframing-elements.jpg",
+      "remoteSource": "https://libraries.excalidraw.com/libraries/gabrielamacakova/basic-ux-wireframing-elements.excalidrawlib",
+      "remotePreview": "https://libraries.excalidraw.com/libraries/gabrielamacakova/basic-ux-wireframing-elements.jpg",
+      "license": "MIT",
+      "categories": ["wireframe", "ux", "ui", "prototype", "product"],
+      "keywords": [
+        "wireframe",
+        "prototype",
+        "low fidelity",
+        "lo-fi",
+        "ui",
+        "ux",
+        "screen",
+        "layout",
+        "button",
+        "form",
+        "input",
+        "checkbox",
+        "dropdown",
+        "toggle",
+        "placeholder",
+        "mobile",
+        "web",
+        "低保真",
+        "原型",
+        "页面",
+        "界面",
+        "布局",
+        "按钮",
+        "表单",
+        "输入框",
+        "控件"
+      ],
+      "useWhen": [
+        "The user asks for low-fidelity product screens, UI layout, app onboarding screens, page variants, or reusable interface controls.",
+        "Codex needs familiar UI primitives instead of drawing raw rectangles from scratch."
+      ],
+      "avoidWhen": [
+        "The scene is purely conceptual, architectural, or data-focused with no UI surface."
+      ]
+    },
+    {
+      "id": "emojis-anumitha-apollo",
+      "name": "Emojis",
+      "author": "Anumitha Apollo",
+      "description": "A collection of hand-drawn emoji elements.",
+      "path": "libraries/vendor/anumithaapollo12/emojis.excalidrawlib",
+      "preview": "libraries/previews/emojis.png",
+      "remoteSource": "https://libraries.excalidraw.com/libraries/anumithaapollo12/emojis.excalidrawlib",
+      "remotePreview": "https://libraries.excalidraw.com/libraries/anumithaapollo12/emojis.png",
+      "license": "MIT",
+      "categories": ["emoji", "emotion", "annotation", "playful"],
+      "keywords": [
+        "emoji",
+        "emotion",
+        "mood",
+        "reaction",
+        "status",
+        "delight",
+        "onboarding",
+        "gamified",
+        "playful",
+        "fun",
+        "表情",
+        "情绪",
+        "状态",
+        "趣味",
+        "游戏化",
+        "轻松",
+        "反馈"
+      ],
+      "useWhen": [
+        "The user asks for playful product sketches, emotional states, onboarding, learning apps, gamified flows, or lightweight visual markers.",
+        "A small icon-like accent can make a user journey or product board easier to scan."
+      ],
+      "avoidWhen": [
+        "The diagram is formal architecture, compliance, finance, or a serious implementation plan."
+      ]
+    },
+    {
+      "id": "decision-flow-control",
+      "name": "Decision flow control",
+      "author": "James Wiens",
+      "description": "Yes/no condition boxes for diagramming.",
+      "path": "libraries/vendor/aretecode/decision-flow-control.excalidrawlib",
+      "preview": "libraries/previews/decision-flow-control.png",
+      "remoteSource": "https://libraries.excalidraw.com/libraries/aretecode/decision-flow-control.excalidrawlib",
+      "remotePreview": "https://libraries.excalidraw.com/libraries/aretecode/decision-flow-control.png",
+      "license": "MIT",
+      "categories": ["flowchart", "decision", "process", "logic"],
+      "keywords": [
+        "decision",
+        "condition",
+        "yes",
+        "no",
+        "branch",
+        "flowchart",
+        "process",
+        "logic",
+        "if",
+        "else",
+        "approval",
+        "gate",
+        "判断",
+        "条件",
+        "是",
+        "否",
+        "分支",
+        "流程图",
+        "审批",
+        "网关"
+      ],
+      "useWhen": [
+        "The user asks for decision trees, approval flows, conditional logic, yes/no branching, process gates, or flowcharts with explicit choices.",
+        "A flow would be clearer with recognized decision-control shapes."
+      ],
+      "avoidWhen": [
+        "The flow is linear and has no branching condition."
+      ]
+    },
+    {
+      "id": "business-model-templates",
+      "name": "Business Model Templates",
+      "author": "Stephan Hellerbrand",
+      "description": "Business Model Canvas and Value Proposition Canvas templates for modeling business aspects.",
+      "path": "libraries/vendor/shellerbrand/canvases.excalidrawlib",
+      "preview": "libraries/previews/business-model-templates.png",
+      "remoteSource": "https://libraries.excalidraw.com/libraries/shellerbrand/canvases.excalidrawlib",
+      "remotePreview": "https://libraries.excalidraw.com/libraries/shellerbrand/canvases.png",
+      "license": "MIT",
+      "categories": ["business", "strategy", "canvas", "product"],
+      "keywords": [
+        "business model",
+        "business canvas",
+        "value proposition",
+        "strategy",
+        "customer segment",
+        "revenue",
+        "channel",
+        "partner",
+        "cost",
+        "market",
+        "商业模式",
+        "商业画布",
+        "价值主张",
+        "战略",
+        "客户细分",
+        "收入",
+        "渠道",
+        "成本",
+        "市场"
+      ],
+      "useWhen": [
+        "The user asks to explore a product/business idea, business model canvas, value proposition, market strategy, revenue model, or customer segment map.",
+        "The output should be a structured business canvas rather than a generic product board."
+      ],
+      "avoidWhen": [
+        "The request is only about UI layout, code architecture, or a narrow implementation flow."
+      ]
+    },
+    {
+      "id": "data-viz-dbs-sticky",
+      "name": "Data Viz",
+      "author": "dbs-sticky",
+      "description": "Common chart components used in data visualizations.",
+      "path": "libraries/vendor/dbssticky/data-viz.excalidrawlib",
+      "preview": "libraries/previews/data-viz.png",
+      "remoteSource": "https://libraries.excalidraw.com/libraries/dbssticky/data-viz.excalidrawlib",
+      "remotePreview": "https://libraries.excalidraw.com/libraries/dbssticky/data-viz.png",
+      "license": "MIT",
+      "categories": ["data", "chart", "analytics", "dashboard"],
+      "keywords": [
+        "data",
+        "visualization",
+        "chart",
+        "graph",
+        "dashboard",
+        "analytics",
+        "metric",
+        "kpi",
+        "bar chart",
+        "line chart",
+        "pie chart",
+        "report",
+        "数据",
+        "可视化",
+        "图表",
+        "仪表盘",
+        "指标",
+        "分析",
+        "报表"
+      ],
+      "useWhen": [
+        "The user asks for dashboards, metric explanations, data products, reports, analytics flows, or chart-like visual summaries.",
+        "The diagram needs recognizable chart components rather than plain data boxes."
+      ],
+      "avoidWhen": [
+        "The diagram has no quantitative or analytical surface."
+      ]
+    }
+  ]
+}

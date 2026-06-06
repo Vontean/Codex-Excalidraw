@@ -1,0 +1,16 @@
+node_modules/
+dist/
+
+artifacts/excalidraw/**
+!artifacts/
+!artifacts/excalidraw/
+!artifacts/excalidraw/.gitkeep
+
+.DS_Store
+.env
+.env.*
+!.env.example
+*.log
+
+ABILITY.md
+DIAGRAM_REFERENCE_RESEARCH.md
