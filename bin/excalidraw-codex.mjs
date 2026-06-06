@@ -6,9 +6,9 @@ import path from "node:path";
 import {
   artifactsDir,
   createSnapshot,
+  diffScenes,
   diffSceneFromSnapshot,
   exportSceneAsset,
-  generateSceneFromBrief,
   getRuntimeConfig,
   inspectSceneFile,
   listBriefTemplates,
@@ -26,6 +26,8 @@ import {
   summarizeScene,
   writeScene
 } from "../server/server.mjs";
+import { createExpressionPlan } from "../server/expression-plan.mjs";
+import { runBriefGenerationWorkflow } from "../server/generation-workflow.mjs";
 import {
   createLibraryItemElements,
   installOfficialLibrary,
@@ -43,9 +45,10 @@ function printHelp() {
   console.log(`excalidraw-codex
 
 Usage:
-  excalidraw-codex serve [--port 3000] [--host 127.0.0.1] [--open]
-  excalidraw-codex from-mermaid <input.md|-> --out <name.excalidraw>
-  excalidraw-codex from-brief <input.txt|-> --out <name.excalidraw> [--template auto|architecture|product-board|page-flow|wireframe|implementation-plan] [--preview] [--no-polish] [--libraries auto|none]
+  excalidraw-codex serve [--port 3000] [--host 127.0.0.1] [--open] [--dev]
+  excalidraw-codex from-mermaid <input.md|-> --out|--scene <name.excalidraw>
+  excalidraw-codex plan <input.txt|-> [--template auto|architecture|product-board|page-flow|wireframe|annotated-ui-map|implementation-plan] [--json]
+  excalidraw-codex from-brief <input.txt|-> --out|--scene <name.excalidraw> [--template auto|architecture|product-board|page-flow|wireframe|annotated-ui-map|implementation-plan] [--plan plan.json] [--preview] [--no-polish] [--libraries auto|none]
   excalidraw-codex templates
   excalidraw-codex library list [--json] [--stats]
   excalidraw-codex library search <query> [--json] [--limit 5]
@@ -75,6 +78,19 @@ Usage:
 Scenes are stored in artifacts/excalidraw by default.`);
 }
 
+const COMMAND_USAGE = {
+  serve: "Usage: excalidraw-codex serve [--port 3000] [--host 127.0.0.1] [--open] [--dev]\n\nDefault serve mode uses the production build from the package root so it works from any current directory. Use --dev only when editing the workbench itself.",
+  "from-mermaid": "Usage: excalidraw-codex from-mermaid <input.md|-> --scene <name.excalidraw>\n       excalidraw-codex from-mermaid <input.md|-> --out ./path/to/file.excalidraw",
+  plan: "Usage: excalidraw-codex plan <input.txt|-> [--template auto|architecture|product-board|page-flow|wireframe|annotated-ui-map|implementation-plan] [--json]",
+  "from-brief": "Usage: excalidraw-codex from-brief <input.txt|-> --scene <name.excalidraw> [--template auto|architecture|product-board|page-flow|wireframe|annotated-ui-map|implementation-plan] [--preview]\n       excalidraw-codex from-brief <input.txt|-> --out ./path/to/file.excalidraw [--preview]",
+  validate: "Usage: excalidraw-codex validate <scene.excalidraw|./path/to/scene.excalidraw>",
+  export: "Usage: excalidraw-codex export <scene.excalidraw|./path/to/scene.excalidraw> --format png|svg|all [--out <file>] [--require-qa] [--skip-qa]",
+  open: "Usage: excalidraw-codex open <scene.excalidraw> [--port 3000]",
+  read: "Usage: excalidraw-codex read <scene.excalidraw|./path/to/scene.excalidraw> [--json]",
+  inspect: "Usage: excalidraw-codex inspect <scene.excalidraw|./path/to/scene.excalidraw> [--from latest|snapshot.excalidraw] [--json]",
+  qa: "Usage: excalidraw-codex qa <scene.excalidraw|./path/to/scene.excalidraw> [--json]"
+};
+
 function readFlag(args, name, fallback = undefined) {
   const index = args.indexOf(name);
   if (index === -1) {
@@ -83,8 +99,60 @@ function readFlag(args, name, fallback = undefined) {
   return args[index + 1] ?? fallback;
 }
 
+function readAnyFlag(args, names, fallback = undefined) {
+  for (const name of names) {
+    const value = readFlag(args, name);
+    if (value !== undefined) return value;
+  }
+  return fallback;
+}
+
 function hasFlag(args, name) {
   return args.includes(name);
+}
+
+function hasHelpFlag(args) {
+  return hasFlag(args, "--help") || hasFlag(args, "-h") || hasFlag(args, "help");
+}
+
+function printCommandHelp(command) {
+  console.log(COMMAND_USAGE[command] || `Usage: excalidraw-codex ${command} --help`);
+}
+
+function isPathLike(input) {
+  const value = String(input || "");
+  return path.isAbsolute(value) || value.includes("/") || value.includes("\\");
+}
+
+function readSceneTarget(args, fallbackName) {
+  const sceneValue = readFlag(args, "--scene");
+  if (sceneValue) {
+    if (isPathLike(sceneValue)) {
+      throw new Error("--scene expects a scene name stored in the workbench artifacts directory. Use --out for file paths.");
+    }
+    return {
+      sceneName: normalizeSceneName(sceneValue),
+      externalOutPath: null
+    };
+  }
+  const outValue = readFlag(args, "--out");
+  if (outValue && isPathLike(outValue)) {
+    return {
+      sceneName: normalizeSceneName(path.basename(outValue)),
+      externalOutPath: path.resolve(process.cwd(), outValue)
+    };
+  }
+  return {
+    sceneName: normalizeSceneName(outValue || fallbackName),
+    externalOutPath: null
+  };
+}
+
+async function copyArtifactScene(sceneName, externalOutPath) {
+  if (!externalOutPath) return path.join(artifactsDir, sceneName);
+  await fs.mkdir(path.dirname(externalOutPath), { recursive: true });
+  await fs.copyFile(path.join(artifactsDir, sceneName), externalOutPath);
+  return externalOutPath;
 }
 
 function parseExportFormats(value = "png") {
@@ -182,11 +250,31 @@ function createScene(elements, files = {}, appState = {}) {
 }
 
 async function commandServe(args) {
+  if (hasHelpFlag(args)) {
+    printCommandHelp("serve");
+    return;
+  }
   const port = Number(readFlag(args, "--port", 3000));
   const host = readFlag(args, "--host", "127.0.0.1");
-  const server = await startServer({ host, port, fallbackPort: port === 3000 ? 3001 : port + 1 });
+  const mode = hasFlag(args, "--dev") ? "development" : "production";
+  if (mode === "production") {
+    await ensureBuild();
+  }
+  const server = await startServer({ host, port, fallbackPort: port === 3000 ? 3001 : port + 1, mode });
   console.log(`Excalidraw Codex is running at ${server.url}`);
+  console.log(`Mode: ${mode}`);
+  if (server.port !== port) {
+    console.log(`Port ${port} was busy; using ${server.port} instead.`);
+  }
   console.log(`Artifacts: ${artifactsDir}`);
+  try {
+    const health = await fetch(`${server.url}api/health`);
+    if (!health.ok) {
+      console.error(`Health check returned HTTP ${health.status}.`);
+    }
+  } catch (error) {
+    console.error(`Health check failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
 
   if (hasFlag(args, "--open")) {
     spawn("open", [server.url], { stdio: "ignore", detached: true }).unref();
@@ -199,8 +287,15 @@ async function commandServe(args) {
 }
 
 async function commandFromMermaid(args) {
+  if (hasHelpFlag(args)) {
+    printCommandHelp("from-mermaid");
+    return;
+  }
   const inputPath = args[0];
-  const outName = normalizeSceneName(readFlag(args, "--out", "mermaid-diagram.excalidraw"));
+  if (!inputPath) {
+    throw new Error(COMMAND_USAGE["from-mermaid"]);
+  }
+  const { sceneName: outName, externalOutPath } = readSceneTarget(args, "mermaid-diagram.excalidraw");
   const fontSize = Number(readFlag(args, "--font-size", 24));
   const definition = await readInput(inputPath);
 
@@ -231,7 +326,7 @@ async function commandFromMermaid(args) {
       }
     });
     await writeScene(outName, scene);
-    console.log(path.join(artifactsDir, outName));
+    console.log(await copyArtifactScene(outName, externalOutPath));
   } finally {
     if (browser) {
       await browser.close();
@@ -251,34 +346,68 @@ async function commandTemplates(args) {
   }
 }
 
-async function commandFromBrief(args) {
+async function readJsonFlag(args, name) {
+  const file = readFlag(args, name);
+  if (!file) return undefined;
+  const raw = await readInput(file);
+  return JSON.parse(raw);
+}
+
+async function commandPlan(args) {
+  if (hasHelpFlag(args)) {
+    printCommandHelp("plan");
+    return;
+  }
   const inputPath = args[0];
-  const outName = normalizeSceneName(readFlag(args, "--out", "brief-diagram.excalidraw"));
+  if (!inputPath) {
+    throw new Error(COMMAND_USAGE.plan);
+  }
   const brief = await readInput(inputPath);
-  const generated = generateSceneFromBrief({
+  const plan = createExpressionPlan({
     brief,
     title: readFlag(args, "--title"),
-    template: readFlag(args, "--template", "auto")
+    template: readFlag(args, "--template", "auto"),
+    expressionPlan: await readJsonFlag(args, "--plan")
   });
-  let selectedLibraries = [];
-  if (readFlag(args, "--libraries", "auto") !== "none") {
-    selectedLibraries = await selectLibrariesForBrief(brief, {
-      limit: Number(readFlag(args, "--library-limit", 3))
-    });
-    generated.scene.appState.codex = {
-      ...(generated.scene.appState.codex || {}),
-      libraries: selectedLibraries.map(({ id, name, score, reasons }) => ({ id, name, score, reasons }))
-    };
+  if (hasFlag(args, "--json")) {
+    printJson(plan);
+    return;
   }
-  await writeScene(outName, generated.scene);
-  let polish;
-  if (!hasFlag(args, "--no-polish")) {
-    polish = await polishSceneFile(outName, { density: readFlag(args, "--density", "normal") }, {
-      snapshot: false,
-      label: "after-from-brief"
-    });
+  console.log(`Template\t${plan.template}`);
+  console.log(`Intent\t${plan.intent}`);
+  console.log(`Language\t${plan.language}`);
+  console.log(`Organization\t${plan.visualOrganization}`);
+  console.log(`Reading path\t${plan.readingPath}`);
+  console.log(`Copy density\t${plan.copyDensity}`);
+  console.log(`Components\t${plan.componentLanguage.join(", ")}`);
+}
+
+async function commandFromBrief(args) {
+  if (hasHelpFlag(args)) {
+    printCommandHelp("from-brief");
+    return;
   }
-  const outputPath = path.join(artifactsDir, outName);
+  const inputPath = args[0];
+  if (!inputPath) {
+    throw new Error(COMMAND_USAGE["from-brief"]);
+  }
+  const { sceneName: outName, externalOutPath } = readSceneTarget(args, "brief-diagram.excalidraw");
+  const brief = await readInput(inputPath);
+  const result = await runBriefGenerationWorkflow({
+    brief,
+    title: readFlag(args, "--title"),
+    template: readFlag(args, "--template", "auto"),
+    expressionPlan: await readJsonFlag(args, "--plan"),
+    libraries: readFlag(args, "--libraries", "auto"),
+    libraryLimit: Number(readFlag(args, "--library-limit", 3)),
+    polish: !hasFlag(args, "--no-polish"),
+    density: readFlag(args, "--density"),
+    preview: false,
+    out: outName
+  }, {
+    writeScene,
+    polishSceneFile
+  });
   if (hasFlag(args, "--preview")) {
     await ensureBuild();
     const server = await startServer({
@@ -288,23 +417,26 @@ async function commandFromBrief(args) {
       mode: "production"
     });
     try {
-      await exportSceneAsset(outName, { format: "png", baseUrl: server.url });
+      result.preview = await exportSceneAsset(outName, { format: "png", baseUrl: server.url });
     } finally {
       await server.close();
     }
   }
+  const outputPath = await copyArtifactScene(outName, externalOutPath);
   if (hasFlag(args, "--json")) {
     printJson({
       path: outputPath,
-      template: generated.template,
-      title: generated.title,
-      elementCount: generated.elementCount,
-      polished: Boolean(polish),
-      libraries: selectedLibraries
+      template: result.template,
+      title: result.title,
+      elementCount: result.elementCount,
+      expressionPlan: result.expressionPlan,
+      polished: result.polished,
+      libraries: result.libraries,
+      preview: result.preview
     });
   } else {
     console.log(outputPath);
-    console.error(`Template: ${generated.template}; elements: ${generated.elementCount}; polished: ${polish ? "yes" : "no"}; libraries: ${selectedLibraries.map((library) => library.id).join(", ") || "none"}`);
+    console.error(`Template: ${result.template}; intent: ${result.expressionPlan?.intent || "unknown"}; elements: ${result.elementCount}; polished: ${result.polished ? "yes" : "no"}; libraries: ${result.libraries.map((library) => library.id).join(", ") || "none"}`);
   }
 }
 
@@ -465,9 +597,13 @@ async function commandLibrary(args) {
 }
 
 async function commandValidate(args) {
+  if (hasHelpFlag(args)) {
+    printCommandHelp("validate");
+    return;
+  }
   const input = args[0];
   if (!input) {
-    throw new Error("Missing scene path.");
+    throw new Error(COMMAND_USAGE.validate);
   }
   const raw = await fs.readFile(resolveScenePath(input), "utf8");
   const scene = JSON.parse(raw);
@@ -506,6 +642,10 @@ async function readSceneFromInput(input) {
 }
 
 async function commandExport(args) {
+  if (hasHelpFlag(args)) {
+    printCommandHelp("export");
+    return;
+  }
   const input = args[0];
   const formats = parseExportFormats(readFlag(args, "--format", "png"));
   const explicitOutPath = readFlag(args, "--out");
@@ -521,14 +661,15 @@ async function commandExport(args) {
   const inputPath = resolveScenePath(input);
   const sceneName = normalizeSceneName(path.basename(inputPath));
   const targetPath = path.join(artifactsDir, sceneName);
-  if (path.resolve(inputPath) !== path.resolve(targetPath)) {
+  const externalInput = path.resolve(inputPath) !== path.resolve(targetPath);
+  if (externalInput) {
     const raw = await fs.readFile(inputPath, "utf8");
     await fs.mkdir(artifactsDir, { recursive: true });
     await fs.writeFile(targetPath, raw, "utf8");
   }
 
   if (!hasFlag(args, "--skip-qa")) {
-    const exportQa = qaScene(await readSceneFromInput(targetPath), { name: sceneName });
+    const exportQa = qaScene(await readSceneFromInput(input), { name: inputPath });
     if (!exportQa.ok) {
       const preview = exportQa.issues
         .slice(0, 4)
@@ -545,7 +686,10 @@ async function commandExport(args) {
   const outputPathFor = (format) =>
     path.resolve(
       process.cwd(),
-      explicitOutPath || path.join(artifactsDir, sceneName.replace(/\.excalidraw$/, `.${format}`))
+      explicitOutPath ||
+        (externalInput
+          ? path.join(path.dirname(inputPath), path.basename(inputPath).replace(/\.excalidraw$/, `.${format}`))
+          : path.join(artifactsDir, sceneName.replace(/\.excalidraw$/, `.${format}`)))
     );
 
   const server = await startServer({
@@ -593,6 +737,10 @@ async function commandExport(args) {
 }
 
 async function commandOpen(args) {
+  if (hasHelpFlag(args)) {
+    printCommandHelp("open");
+    return;
+  }
   const scene = args[0] ? normalizeSceneName(path.basename(args[0])) : "";
   const port = Number(readFlag(args, "--port", 3000));
   const url = `http://127.0.0.1:${port}/${scene ? `?scene=${encodeURIComponent(scene)}` : ""}`;
@@ -837,12 +985,16 @@ async function commandRestore(args) {
 }
 
 async function commandRead(args) {
+  if (hasHelpFlag(args)) {
+    printCommandHelp("read");
+    return;
+  }
   const input = args[0];
   if (!input) {
-    throw new Error("Missing scene path.");
+    throw new Error(COMMAND_USAGE.read);
   }
-  const fileName = normalizeSceneName(path.basename(input));
-  const summary = summarizeScene(await readSceneFromInput(input), { name: fileName });
+  const scenePathLabel = isPathLike(input) ? resolveScenePath(input) : normalizeSceneName(path.basename(input));
+  const summary = summarizeScene(await readSceneFromInput(input), { name: scenePathLabel });
   if (hasFlag(args, "--json")) {
     printJson(summary);
   } else {
@@ -864,11 +1016,50 @@ async function commandDiff(args) {
 }
 
 async function commandInspect(args) {
+  if (hasHelpFlag(args)) {
+    printCommandHelp("inspect");
+    return;
+  }
   const input = args[0];
   if (!input) {
-    throw new Error("Missing scene path.");
+    throw new Error(COMMAND_USAGE.inspect);
   }
-  const result = await inspectSceneFile(input, { from: readFlag(args, "--from", "latest") });
+  let result;
+  if (isPathLike(input)) {
+    const inputPath = resolveScenePath(input);
+    const scene = await readSceneFromInput(input);
+    const summary = summarizeScene(scene, { name: inputPath });
+    let diff = null;
+    let diffError = "External path inspection has no artifact snapshot unless --from is provided.";
+    const reference = readFlag(args, "--from");
+    if (reference) {
+      try {
+        const previous = await readSceneFromInput(reference);
+        diff = diffScenes(previous, scene, {
+          name: inputPath,
+          comparedWith: resolveScenePath(reference)
+        });
+        diffError = undefined;
+      } catch (error) {
+        diffError = error instanceof Error ? error.message : String(error);
+      }
+    }
+    result = {
+      scene: inputPath,
+      inspectedAt: new Date().toISOString(),
+      summary,
+      diff,
+      diffError,
+      takeaways: diff
+        ? ["External file compared with the provided reference."]
+        : ["Current-state inspection for an external scene file."],
+      nextActions: summary.layoutIssues.length
+        ? ["Review QA notes before exporting or sharing."]
+        : ["Use this scene as the current editable source."]
+    };
+  } else {
+    result = await inspectSceneFile(input, { from: readFlag(args, "--from", "latest") });
+  }
   if (hasFlag(args, "--json")) {
     printJson(result);
   } else {
@@ -946,12 +1137,16 @@ async function commandPolish(args) {
 }
 
 async function commandQa(args) {
+  if (hasHelpFlag(args)) {
+    printCommandHelp("qa");
+    return;
+  }
   const input = args[0];
   if (!input) {
-    throw new Error("Missing scene path.");
+    throw new Error(COMMAND_USAGE.qa);
   }
-  const fileName = normalizeSceneName(path.basename(input));
-  const result = qaScene(await readSceneFromInput(input), { name: fileName });
+  const scenePathLabel = isPathLike(input) ? resolveScenePath(input) : normalizeSceneName(path.basename(input));
+  const result = qaScene(await readSceneFromInput(input), { name: scenePathLabel });
   if (hasFlag(args, "--json")) {
     printJson(result);
   } else {
@@ -999,6 +1194,7 @@ async function main() {
 
   if (command === "serve") return commandServe(args);
   if (command === "from-mermaid") return commandFromMermaid(args);
+  if (command === "plan") return commandPlan(args);
   if (command === "from-brief") return commandFromBrief(args);
   if (command === "templates") return commandTemplates(args);
   if (command === "library" || command === "libraries") return commandLibrary(args);

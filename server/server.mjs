@@ -4,12 +4,26 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { createServer as createViteServer } from "vite";
 import { generateSceneFromBrief, listBriefTemplates } from "./brief-templates.mjs";
+import { createExpressionPlan } from "./expression-plan.mjs";
+import { runBriefGenerationWorkflow } from "./generation-workflow.mjs";
+import { createSceneFileOperations } from "./scene-file-operations.mjs";
 import {
   artifactsDir,
   getRuntimeConfig,
   packageRoot as projectRoot,
   snapshotsDir
 } from "./config.mjs";
+import {
+  createSnapshot,
+  ensureArtifactsDir,
+  listScenes,
+  listSnapshots,
+  normalizeSceneName,
+  readScene,
+  resolveSnapshotPath,
+  restoreSnapshot,
+  writeScene
+} from "./scene-workspace.mjs";
 import {
   inspectRegisteredLibrary,
   librariesDir,
@@ -20,131 +34,6 @@ import {
 } from "./library-registry.mjs";
 
 export { artifactsDir, getRuntimeConfig, projectRoot, snapshotsDir };
-
-function normalizeSceneName(input) {
-  const basename = path.basename(String(input || "untitled.excalidraw"));
-  const safe = basename.replace(/[^a-zA-Z0-9._-]/g, "-");
-  return safe.endsWith(".excalidraw") ? safe : `${safe}.excalidraw`;
-}
-
-async function ensureArtifactsDir() {
-  await fs.mkdir(artifactsDir, { recursive: true });
-}
-
-function scenePath(name) {
-  return path.join(artifactsDir, normalizeSceneName(name));
-}
-
-function sceneSlug(name) {
-  return normalizeSceneName(name).replace(/\.excalidraw$/, "");
-}
-
-async function ensureSceneSnapshotsDir(name) {
-  const dir = path.join(snapshotsDir, sceneSlug(name));
-  await fs.mkdir(dir, { recursive: true });
-  return dir;
-}
-
-function safeLabel(input) {
-  const label = String(input || "")
-    .trim()
-    .replace(/[^a-zA-Z0-9._-]/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "");
-  return label.slice(0, 48);
-}
-
-function snapshotTimestamp(date = new Date()) {
-  return date.toISOString().replace(/[:.]/g, "-");
-}
-
-async function readScene(name) {
-  const filePath = scenePath(name);
-  const raw = await fs.readFile(filePath, "utf8");
-  return JSON.parse(raw);
-}
-
-async function writeScene(name, scene) {
-  await ensureArtifactsDir();
-  const fileName = normalizeSceneName(name);
-  const filePath = scenePath(fileName);
-  await fs.writeFile(filePath, `${JSON.stringify(scene, null, 2)}\n`, "utf8");
-  return fileName;
-}
-
-async function createSnapshot(name, options = {}) {
-  await ensureArtifactsDir();
-  const fileName = normalizeSceneName(name);
-  const raw = await fs.readFile(scenePath(fileName), "utf8");
-  const dir = await ensureSceneSnapshotsDir(fileName);
-  const label = safeLabel(options.label);
-  const snapshotName = `${snapshotTimestamp()}${label ? `-${label}` : ""}.excalidraw`;
-  const filePath = path.join(dir, snapshotName);
-  await fs.writeFile(filePath, raw, "utf8");
-  return {
-    scene: fileName,
-    name: snapshotName,
-    path: filePath
-  };
-}
-
-async function listSnapshots(name) {
-  const fileName = normalizeSceneName(name);
-  const dir = path.join(snapshotsDir, sceneSlug(fileName));
-  let names = [];
-  try {
-    names = await fs.readdir(dir);
-  } catch (error) {
-    if (error?.code === "ENOENT") return [];
-    throw error;
-  }
-  const snapshots = await Promise.all(
-    names
-      .filter((snapshot) => snapshot.endsWith(".excalidraw"))
-      .map(async (snapshot) => {
-        const filePath = path.join(dir, snapshot);
-        const stat = await fs.stat(filePath);
-        return {
-          scene: fileName,
-          name: snapshot,
-          path: filePath,
-          size: stat.size,
-          createdAt: stat.mtime.toISOString()
-        };
-      })
-  );
-  return snapshots.sort((a, b) => b.name.localeCompare(a.name));
-}
-
-async function resolveSnapshotPath(name, reference = "latest") {
-  const fileName = normalizeSceneName(name);
-  const snapshotRef = String(reference || "latest");
-  if (snapshotRef === "latest") {
-    const [latest] = await listSnapshots(fileName);
-    if (!latest) {
-      throw new Error(`No snapshots found for ${fileName}`);
-    }
-    return latest.path;
-  }
-  const directPath = path.resolve(process.cwd(), snapshotRef);
-  if (path.isAbsolute(snapshotRef) || snapshotRef.includes(path.sep)) {
-    return directPath;
-  }
-  const snapshotName = snapshotRef.endsWith(".excalidraw") ? snapshotRef : `${snapshotRef}.excalidraw`;
-  return path.join(snapshotsDir, sceneSlug(fileName), snapshotName);
-}
-
-async function restoreSnapshot(name, reference = "latest") {
-  const fileName = normalizeSceneName(name);
-  const snapshotPath = await resolveSnapshotPath(fileName, reference);
-  const raw = await fs.readFile(snapshotPath, "utf8");
-  await fs.writeFile(scenePath(fileName), raw, "utf8");
-  return {
-    scene: fileName,
-    restoredFrom: snapshotPath,
-    path: scenePath(fileName)
-  };
-}
 
 function activeElements(scene) {
   return Array.isArray(scene?.elements)
@@ -324,6 +213,16 @@ function isContainerElement(element) {
   return element?.type === "frame" || ["section", "page-card", "wireframe-detail"].includes(element?.customData?.codexRole);
 }
 
+function isStructuralContainment(first, second) {
+  const firstBounds = elementBounds(first);
+  const secondBounds = elementBounds(second);
+  if (isContainerElement(first) && containsBounds(firstBounds, secondBounds, 8)) return true;
+  if (isContainerElement(second) && containsBounds(secondBounds, firstBounds, 8)) return true;
+  if ((first.groupIds || []).some((groupId) => (second.groupIds || []).includes(groupId))) return true;
+  if (first.containerId === second.id || second.containerId === first.id) return true;
+  return false;
+}
+
 function detectPolishIssues(scene, elements) {
   const codex = scene?.appState?.codex;
   if (!codex) return [];
@@ -411,6 +310,7 @@ function connectorRouteCrossingIssues(elements) {
     for (const candidate of elements) {
       if (candidate.id === startId || candidate.id === endId) continue;
       if (candidate.id === connector.id || isConnectorElement(candidate) || isContainerLike(candidate)) continue;
+      if (candidate.customData?.labelFor === connector.id) continue;
       if ((candidate.groupIds || []).some((groupId) => (connector.groupIds || []).includes(groupId))) continue;
       const candidateBounds = elementBounds(candidate);
       if (horizontal) {
@@ -484,11 +384,12 @@ function detectLayoutIssues(elements, options = {}) {
 
   for (const element of elements.filter((item) => item.type === "arrow" || item.type === "line")) {
     if (!connectionStartId(element) || !connectionEndId(element)) {
+      if (element?.customData?.codexRole === "guide-arrow" || element?.customData?.codexRole === "annotation-line") continue;
       issues.push({
         type: "unbound-connector",
-        severity: "error",
+        severity: "warning",
         elementId: element.id,
-        message: "Connector is not bound at both ends."
+        message: "Connector is not bound at both ends; this may be intentional for annotation or guide lines."
       });
     }
   }
@@ -498,12 +399,9 @@ function detectLayoutIssues(elements, options = {}) {
     for (let otherIndex = index + 1; otherIndex < candidates.length; otherIndex += 1) {
       const first = candidates[index];
       const second = candidates[otherIndex];
-      if ((first.groupIds || []).some((groupId) => (second.groupIds || []).includes(groupId))) continue;
-      if (first.containerId === second.id || second.containerId === first.id) continue;
+      if (isStructuralContainment(first, second)) continue;
       const firstBounds = elementBounds(first);
       const secondBounds = elementBounds(second);
-      if (isContainerElement(first) && containsBounds(firstBounds, secondBounds)) continue;
-      if (isContainerElement(second) && containsBounds(secondBounds, firstBounds)) continue;
       const ratio = overlapRatio(firstBounds, secondBounds);
       if (ratio > 0.82) {
         issues.push({
@@ -952,8 +850,11 @@ function densityDefaults(density = "normal") {
     return {
       itemGap: 78,
       labelPadding: 48,
+      labelMaxGrow: 72,
+      connectorLabelOffset: 12,
       containerPadding: 28,
       containerGap: 40,
+      containerRowGap: 28,
       annotationGap: 28,
       rowTolerance: 72
     };
@@ -962,8 +863,11 @@ function densityDefaults(density = "normal") {
     return {
       itemGap: 140,
       labelPadding: 72,
+      labelMaxGrow: 128,
+      connectorLabelOffset: 18,
       containerPadding: 44,
       containerGap: 64,
+      containerRowGap: 40,
       annotationGap: 44,
       rowTolerance: 88
     };
@@ -971,8 +875,11 @@ function densityDefaults(density = "normal") {
   return {
     itemGap: 108,
     labelPadding: 60,
+    labelMaxGrow: 96,
+    connectorLabelOffset: 14,
     containerPadding: 36,
     containerGap: 52,
+    containerRowGap: 32,
     annotationGap: 36,
     rowTolerance: 80
   };
@@ -1217,6 +1124,125 @@ function moveElementsBy(elements, dx, dy) {
   }
 }
 
+function labelTargetId(element) {
+  return typeof element?.customData?.labelFor === "string" ? element.customData.labelFor : "";
+}
+
+function isRecipeLabel(element) {
+  return element?.type === "text" && Boolean(labelTargetId(element));
+}
+
+function setElementFrame(element, frame) {
+  let changed = false;
+  for (const key of ["x", "y", "width", "height"]) {
+    const next = Number(frame[key]);
+    if (Number.isFinite(next) && Math.round(Number(element[key] || 0)) !== Math.round(next)) {
+      element[key] = next;
+      changed = true;
+    }
+  }
+  if (changed) markElementChanged(element);
+  return changed;
+}
+
+function labelFrameForTarget(label, target, options = {}) {
+  const role = elementRole(label);
+  const targetBounds = elementBounds(target);
+  const fontSize = Number(label.fontSize || 20);
+  const labelHeight = Math.max(Number(label.height || 0), Math.ceil(fontSize * 1.45));
+  if (isConnectorElement(target)) {
+    const center = elementCenter(target);
+    const targetIsVertical = targetBounds.height > Math.max(24, targetBounds.width * 3);
+    const targetIsHorizontal = targetBounds.width > Math.max(24, targetBounds.height * 3);
+    const offset = Number(options.connectorLabelOffset || 14);
+    if (targetIsVertical) {
+      return {
+        x: center.x + offset,
+        y: center.y - labelHeight / 2,
+        width: Math.max(Number(label.width || 0), textWidthEstimate(elementText(label), fontSize) + 18),
+        height: labelHeight
+      };
+    }
+    if (targetIsHorizontal) {
+      const width = Math.max(Number(label.width || 0), textWidthEstimate(elementText(label), fontSize) + 18);
+      return {
+        x: center.x - width / 2,
+        y: center.y - labelHeight - offset,
+        width,
+        height: labelHeight
+      };
+    }
+    const width = Math.max(Number(label.width || 0), textWidthEstimate(elementText(label), fontSize) + 18);
+    return {
+      x: center.x + offset,
+      y: center.y - labelHeight / 2,
+      width,
+      height: labelHeight
+    };
+  }
+
+  if (role === "section-label") {
+    return {
+      x: targetBounds.x + 22,
+      y: targetBounds.y + 18,
+      width: Math.max(24, targetBounds.width - 44),
+      height: labelHeight
+    };
+  }
+  if (role === "page-card-label") {
+    return {
+      x: targetBounds.x + 18,
+      y: targetBounds.y + 16,
+      width: Math.max(24, targetBounds.width - 36),
+      height: labelHeight
+    };
+  }
+
+  const padding = role === "badge-label" ? 18 : 16;
+  return {
+    x: targetBounds.x + padding,
+    y: targetBounds.y + Math.max(8, Math.round((targetBounds.height - labelHeight) / 2)),
+    width: Math.max(24, targetBounds.width - padding * 2),
+    height: labelHeight
+  };
+}
+
+function resizeLabelTargets(elements, options = {}) {
+  const byId = new Map(elements.map((element) => [element.id, element]));
+  let adjusted = 0;
+  const maxGrow = Number(options.maxGrow || 96);
+  for (const label of elements.filter(isRecipeLabel)) {
+    const target = byId.get(labelTargetId(label));
+    if (!target || isConnectorElement(target)) continue;
+    const role = elementRole(label);
+    if (!["badge-label", "sticky-label", "service-card-label", "milestone-label"].includes(role)) continue;
+    const fontSize = Number(label.fontSize || 20);
+    const desiredLabelWidth = textWidthEstimate(elementText(label), fontSize) + 24;
+    const padding = role === "badge-label" ? 18 : 16;
+    const desiredTargetWidth = desiredLabelWidth + padding * 2;
+    const currentWidth = Number(target.width || 0);
+    const nextWidth = Math.min(currentWidth + maxGrow, Math.max(currentWidth, desiredTargetWidth));
+    if (nextWidth > currentWidth + 1) {
+      target.width = nextWidth;
+      markElementChanged(target);
+      adjusted += 1;
+    }
+  }
+  return adjusted ? [{ mode: "polish-label-target-size", matched: adjusted }] : [];
+}
+
+function alignRecipeLabels(elements, options = {}) {
+  const byId = new Map(elements.map((element) => [element.id, element]));
+  let moved = 0;
+  for (const label of elements.filter(isRecipeLabel)) {
+    const target = byId.get(labelTargetId(label));
+    if (!target) continue;
+    const frame = labelFrameForTarget(label, target, options);
+    if (setElementFrame(label, frame)) moved += 1;
+  }
+  return moved ? [{ mode: "polish-recipe-labels", matched: moved }] : [];
+}
+
 function supplementalAnnotationRows(children, primaryBounds, tolerance) {
   const candidates = children
     .filter((element) => !isPrimaryLayoutElement(element))
@@ -1356,11 +1382,71 @@ function stackTopLevelContainers(elements, memberships, options = {}) {
   return reports;
 }
 
+function topLevelContainers(elements) {
+  const containerCandidates = elements.filter((element) => isContainerLike(element));
+  return containerCandidates.filter((element) => {
+    const bounds = elementBounds(element);
+    const center = elementCenter(element);
+    return !containerCandidates.some((candidate) => {
+      if (candidate.id === element.id) return false;
+      const candidateBounds = elementBounds(candidate);
+      const isLargerContainer =
+        candidateBounds.width * candidateBounds.height > bounds.width * bounds.height * 1.2;
+      return isLargerContainer && center.x >= candidateBounds.x && center.x <= candidateBounds.right && center.y >= candidateBounds.y && center.y <= candidateBounds.bottom;
+    });
+  });
+}
+
+function distributeTopLevelContainerRows(elements, memberships, options = {}) {
+  const byId = new Map(elements.map((element) => [element.id, element]));
+  const membershipByContainer = new Map(memberships.map((membership) => [membership.containerId, membership]));
+  const containers = topLevelContainers(elements);
+  const rows = clusterRows(
+    containers.map((container) => ({
+      id: container.id,
+      element: container,
+      bounds: elementBounds(container)
+    })),
+    Number(options.rowTolerance || 96)
+  );
+  const gap = Number(options.gap || 32);
+  const reports = [];
+  for (const row of rows) {
+    const sorted = [...row.items].sort((a, b) => a.bounds.x - b.bounds.x);
+    if (sorted.length < 2) continue;
+    let cursorX = Math.min(...sorted.map((item) => item.bounds.x));
+    let moved = 0;
+    for (const item of sorted) {
+      const dx = Math.max(0, cursorX - item.bounds.x);
+      if (dx) {
+        moved += moveContainerWithMembership(item.element, membershipByContainer.get(item.element.id), byId, dx, 0);
+      }
+      const updated = elementBounds(item.element);
+      cursorX = updated.right + gap;
+    }
+    if (moved) {
+      reports.push({
+        mode: "polish-container-row-spacing",
+        moved,
+        gap,
+        matched: sorted.map((item) => item.id)
+      });
+    }
+  }
+  return reports;
+}
+
 function applyPolishPlan(scene, plan = {}, options = {}) {
   const nextScene = cloneScene(scene);
   const defaults = densityDefaults(plan.density || "normal");
   const report = [];
   const initialMemberships = captureContainerMembership(activeElements(nextScene));
+
+  report.push(
+    ...resizeLabelTargets(activeElements(nextScene), {
+      maxGrow: Number(plan.labelMaxGrow ?? defaults.labelMaxGrow ?? 96)
+    })
+  );
 
   report.push(
     ...spaceContainerAnnotations(activeElements(nextScene), initialMemberships, {
@@ -1401,6 +1487,24 @@ function applyPolishPlan(scene, plan = {}, options = {}) {
     })
   );
 
+  const containerRowSpacing = distributeTopLevelContainerRows(activeElements(nextScene), initialMemberships, {
+    gap: Number(plan.containerRowGap ?? defaults.containerRowGap ?? 32),
+    rowTolerance: Number(plan.rowTolerance ?? defaults.rowTolerance)
+  });
+  report.push(...containerRowSpacing);
+  if (containerRowSpacing.length && options.refreshConnectors !== false) {
+    const refreshedAfterContainers = refreshConnectorGeometry(nextScene);
+    if (refreshedAfterContainers) {
+      report.push({ mode: "refresh-connectors-after-container-spacing", matched: refreshedAfterContainers });
+    }
+  }
+
+  report.push(
+    ...alignRecipeLabels(activeElements(nextScene), {
+      connectorLabelOffset: Number(plan.connectorLabelOffset ?? defaults.connectorLabelOffset ?? 14)
+    })
+  );
+
   nextScene.appState = {
     ...(nextScene.appState || {}),
     codex: {
@@ -1409,7 +1513,7 @@ function applyPolishPlan(scene, plan = {}, options = {}) {
         density: plan.density || "normal",
         polishedAt: new Date().toISOString(),
         reportCount: report.length,
-        principles: ["unit-spacing", "label-aware-connectors", "container-fit", "container-stack", "annotation-spacing"]
+        principles: ["unit-spacing", "label-aware-connectors", "container-fit", "container-stack", "annotation-spacing", "grouped-label-fit"]
       }
     }
   };
@@ -1534,65 +1638,21 @@ function qaScene(scene, options = {}) {
   };
 }
 
-async function patchSceneFile(name, plan, options = {}) {
-  const fileName = normalizeSceneName(name);
-  const before = await readScene(fileName);
-  const snapshot = options.dryRun || options.snapshot === false ? null : await createSnapshot(fileName, { label: options.label || "before-patch" });
-  const result = applyPatchPlan(before, plan, options);
-  const diff = diffScenes(before, result.scene, { name: fileName, comparedWith: snapshot?.path || "in-memory-before" });
-  if (!options.dryRun) {
-    await writeScene(fileName, result.scene);
-  }
-  return {
-    ok: true,
-    scene: fileName,
-    snapshot,
-    dryRun: Boolean(options.dryRun),
-    report: result.report,
-    diff,
-    qa: qaScene(result.scene, { name: fileName })
-  };
-}
-
-async function layoutSceneFile(name, plan, options = {}) {
-  const fileName = normalizeSceneName(name);
-  const before = await readScene(fileName);
-  const snapshot = options.dryRun || options.snapshot === false ? null : await createSnapshot(fileName, { label: options.label || "before-layout" });
-  const result = applyLayoutPlan(before, plan, options);
-  const diff = diffScenes(before, result.scene, { name: fileName, comparedWith: snapshot?.path || "in-memory-before" });
-  if (!options.dryRun) {
-    await writeScene(fileName, result.scene);
-  }
-  return {
-    ok: true,
-    scene: fileName,
-    snapshot,
-    dryRun: Boolean(options.dryRun),
-    report: result.report,
-    diff,
-    qa: qaScene(result.scene, { name: fileName })
-  };
-}
-
-async function polishSceneFile(name, plan = {}, options = {}) {
-  const fileName = normalizeSceneName(name);
-  const before = await readScene(fileName);
-  const snapshot = options.dryRun || options.snapshot === false ? null : await createSnapshot(fileName, { label: options.label || "before-polish" });
-  const result = applyPolishPlan(before, plan, options);
-  const diff = diffScenes(before, result.scene, { name: fileName, comparedWith: snapshot?.path || "in-memory-before" });
-  if (!options.dryRun) {
-    await writeScene(fileName, result.scene);
-  }
-  return {
-    ok: true,
-    scene: fileName,
-    snapshot,
-    dryRun: Boolean(options.dryRun),
-    report: result.report,
-    diff,
-    qa: qaScene(result.scene, { name: fileName })
-  };
-}
+const {
+  layoutSceneFile,
+  patchSceneFile,
+  polishSceneFile
+} = createSceneFileOperations({
+  applyLayoutPlan,
+  applyPatchPlan,
+  applyPolishPlan,
+  createSnapshot,
+  diffScenes,
+  normalizeSceneName,
+  qaScene,
+  readScene,
+  writeScene
+});
 
 function summarizeScene(scene, options = {}) {
   const elements = activeElements(scene);
@@ -1845,38 +1905,6 @@ async function inspectSceneFile(name, options = {}) {
   };
 }
 
-async function listScenes() {
-  await ensureArtifactsDir();
-  const names = await fs.readdir(artifactsDir);
-  const summaries = await Promise.all(
-    names
-      .filter((name) => name.endsWith(".excalidraw"))
-      .map(async (name) => {
-        const stat = await fs.stat(path.join(artifactsDir, name));
-        const previewName = name.replace(/\.excalidraw$/, ".png");
-        const snapshots = await listSnapshots(name);
-        let previewUrl;
-        let previewModifiedAt;
-        try {
-          const previewStat = await fs.stat(path.join(artifactsDir, previewName));
-          previewUrl = `/artifacts/excalidraw/${encodeURIComponent(previewName)}`;
-          previewModifiedAt = previewStat.mtime.toISOString();
-        } catch {
-          previewUrl = undefined;
-        }
-        return {
-          name,
-          size: stat.size,
-          modifiedAt: stat.mtime.toISOString(),
-          snapshotCount: snapshots.length,
-          previewModifiedAt,
-          previewUrl
-        };
-      })
-  );
-  return summaries.sort((a, b) => b.modifiedAt.localeCompare(a.modifiedAt));
-}
-
 function configureApi(app) {
   app.use(express.json({ limit: "50mb" }));
 
@@ -1894,6 +1922,19 @@ function configureApi(app) {
 
   app.get("/api/templates", (_request, response) => {
     response.json(listBriefTemplates());
+  });
+
+  app.post("/api/expression-plan", (request, response, next) => {
+    try {
+      response.json(createExpressionPlan({
+        brief: request.body?.brief || request.body?.prompt || "",
+        title: request.body?.title,
+        template: request.body?.template || "auto",
+        expressionPlan: request.body?.expressionPlan || request.body?.plan
+      }));
+    } catch (error) {
+      next(error);
+    }
   });
 
   app.get("/api/libraries", async (request, response, next) => {
@@ -1945,46 +1986,34 @@ function configureApi(app) {
   app.post("/api/from-brief", async (request, response, next) => {
     try {
       const outName = normalizeSceneName(request.body?.out || request.body?.name || "brief-diagram.excalidraw");
-      const generated = generateSceneFromBrief({
+      const result = await runBriefGenerationWorkflow({
         brief: request.body?.brief || request.body?.prompt || "",
         title: request.body?.title,
-        template: request.body?.template || "auto"
+        template: request.body?.template || "auto",
+        expressionPlan: request.body?.expressionPlan || request.body?.plan,
+        libraries: request.body?.libraries,
+        libraryLimit: request.body?.libraryLimit,
+        polish: request.body?.polish,
+        density: request.body?.density,
+        preview: request.body?.preview,
+        baseUrl: baseUrlFromRequest(request),
+        out: outName,
+        polishLabel: "after-api-from-brief"
+      }, {
+        writeScene,
+        polishSceneFile,
+        exportSceneAsset
       });
-      if (request.body?.libraries !== false) {
-        const selectedLibraries = await selectLibrariesForBrief(request.body?.brief || request.body?.prompt || "", {
-          limit: Number(request.body?.libraryLimit || 3)
-        });
-        generated.scene.appState.codex = {
-          ...(generated.scene.appState.codex || {}),
-          libraries: selectedLibraries.map(({ id, name, score, reasons }) => ({ id, name, score, reasons }))
-        };
-      }
-      const fileName = await writeScene(outName, generated.scene);
-      let polish;
-      if (request.body?.polish !== false) {
-        polish = await polishSceneFile(fileName, {
-          density: request.body?.density || "normal"
-        }, {
-          snapshot: false,
-          label: "after-api-from-brief"
-        });
-      }
-      let preview;
-      if (request.body?.preview !== false) {
-        preview = await exportSceneAsset(fileName, {
-          baseUrl: baseUrlFromRequest(request),
-          format: "png"
-        });
-      }
       response.json({
         ok: true,
-        name: fileName,
-        template: generated.template,
-        title: generated.title,
-        elementCount: generated.elementCount,
-        polished: Boolean(polish),
-        preview,
-        url: `/?scene=${encodeURIComponent(fileName)}`
+        name: result.name,
+        template: result.template,
+        title: result.title,
+        elementCount: result.elementCount,
+        expressionPlan: result.expressionPlan,
+        polished: result.polished,
+        preview: result.preview,
+        url: `/?scene=${encodeURIComponent(result.name)}`
       });
     } catch (error) {
       next(error);

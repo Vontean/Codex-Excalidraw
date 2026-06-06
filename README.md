@@ -16,6 +16,14 @@ The goal is not to replace Mermaid. It gives agents a lightweight way to create 
 - Read-back commands for inspecting, diffing, patching, polishing, QA, snapshots, and exports.
 - Optional public Excalidraw library registry for wireframes, emoji accents, decision controls, business canvases, and data-viz components.
 
+## How It Is Organized
+
+- `Expression Plan`: turns a user brief into language, intent, visual organization, reading path, copy density, and library intent.
+- `Diagram Recipes`: turn the plan into editable Excalidraw primitives, preferring grouped shape + text elements over hidden labels.
+- `Generation Workflow`: keeps CLI and HTTP generation behavior consistent across brief generation, library selection, polish, preview, and save.
+- `Scene Workspace`: owns local scene files, snapshots, preview metadata, and artifact paths.
+- `Quality / Export`: keeps QA and browser-rendered PNG/SVG export close to the actual Excalidraw rendering path.
+
 ## Requirements
 
 - macOS, Linux, or Windows with a recent shell.
@@ -103,8 +111,9 @@ Common commands:
 ```sh
 excalidraw-codex config
 excalidraw-codex serve
-excalidraw-codex from-mermaid diagram.md --out architecture.excalidraw
-excalidraw-codex from-brief brief.txt --out product-map.excalidraw --preview
+excalidraw-codex plan brief.txt --json
+excalidraw-codex from-mermaid diagram.md --scene architecture.excalidraw
+excalidraw-codex from-brief brief.txt --scene product-map.excalidraw --preview
 excalidraw-codex validate product-map.excalidraw
 excalidraw-codex qa product-map.excalidraw
 excalidraw-codex export product-map.excalidraw --format all --require-qa
@@ -112,6 +121,15 @@ excalidraw-codex inspect product-map.excalidraw --from latest
 excalidraw-codex snapshot product-map.excalidraw --label before-edit
 excalidraw-codex gallery-refresh --all
 ```
+
+`serve` uses the production build by default and is safe to launch from another project directory. Use `excalidraw-codex serve --dev` only when developing this workbench itself.
+
+Path semantics:
+
+- `--scene <name.excalidraw>` means a named scene in the configured workbench `artifactsDir`.
+- `--out ./path/to/file.excalidraw` writes a real file path.
+- Read commands such as `validate`, `read`, `inspect`, `qa`, and `export` respect absolute or relative file paths.
+- Quote browser URLs that contain `?`, for example: `"http://127.0.0.1:3000/?scene=product-map.excalidraw"`.
 
 Library commands:
 
@@ -136,15 +154,17 @@ Use Excalidraw to draw an editable architecture map for this product idea.
 The skill tells the agent to:
 
 - choose an expression strategy first;
+- use `excalidraw-codex plan` for non-trivial briefs so intent, visual organization, reading path, language, copy density, and library intent are explicit before generation;
 - use Mermaid only when the structure is naturally Mermaid-shaped;
 - create editable `.excalidraw` files;
-- use libraries as optional visual building blocks, not mandatory decoration;
+- read `excalidraw-codex config` and return the actual configured `artifactsDir`;
+- treat recipes and libraries as optional visual building blocks, not rigid templates or mandatory decoration;
 - validate and QA without turning every warning into rigid automatic layout;
 - export PNG/SVG previews;
 - open the local browser workbench for editing;
 - inspect or diff the edited canvas before continuing.
 
-Generated canvas text follows the user's current language by default. If the user is speaking Chinese, the diagram labels should be Chinese; if the user is speaking English, labels should be English.
+Generated canvas text follows the user's current language by default. If the user is speaking Chinese, the diagram labels should be Chinese; if the user is speaking English, labels should be English. Product names, API names, filenames, and code identifiers are preserved.
 
 ## Runtime Configuration
 

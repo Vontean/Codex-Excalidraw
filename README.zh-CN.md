@@ -16,6 +16,14 @@
 - 读回、检查、diff、patch、polish、QA、快照和导出的命令。
 - 可选的 Excalidraw 公共 Library 注册表，用于 wireframe、emoji 标记、决策控件、商业画布和数据可视化组件。
 
+## 内部组织方式
+
+- `Expression Plan`：把用户 brief 转成语言、意图、视觉组织方式、阅读路径、文案密度和 library 使用意图。
+- `Diagram Recipes`：把表达计划转成可编辑 Excalidraw primitives，优先使用分组的 shape + text，而不是隐藏 label。
+- `Generation Workflow`：统一 CLI 和 HTTP 的生成行为，包括 brief 生成、library 选择、polish、预览和保存。
+- `Scene Workspace`：负责本地 scene 文件、snapshot、preview 元数据和 artifacts 路径。
+- `Quality / Export`：让 QA 与浏览器渲染 PNG/SVG 导出尽量贴近真实 Excalidraw 渲染路径。
+
 ## 环境要求
 
 - macOS、Linux 或 Windows，并有较新的 shell 环境。
@@ -103,8 +111,9 @@ excalidraw-codex open my-diagram.excalidraw
 ```sh
 excalidraw-codex config
 excalidraw-codex serve
-excalidraw-codex from-mermaid diagram.md --out architecture.excalidraw
-excalidraw-codex from-brief brief.txt --out product-map.excalidraw --preview
+excalidraw-codex plan brief.txt --json
+excalidraw-codex from-mermaid diagram.md --scene architecture.excalidraw
+excalidraw-codex from-brief brief.txt --scene product-map.excalidraw --preview
 excalidraw-codex validate product-map.excalidraw
 excalidraw-codex qa product-map.excalidraw
 excalidraw-codex export product-map.excalidraw --format all --require-qa
@@ -112,6 +121,15 @@ excalidraw-codex inspect product-map.excalidraw --from latest
 excalidraw-codex snapshot product-map.excalidraw --label before-edit
 excalidraw-codex gallery-refresh --all
 ```
+
+`serve` 默认使用 production build，因此可以安全地从其他项目目录启动。只有在开发这个工作台本身时，才使用 `excalidraw-codex serve --dev`。
+
+路径语义：
+
+- `--scene <name.excalidraw>` 表示配置的工作台 `artifactsDir` 里的场景名。
+- `--out ./path/to/file.excalidraw` 表示真实文件路径。
+- `validate`、`read`、`inspect`、`qa`、`export` 等读取类命令会尊重绝对路径或相对路径。
+- shell 里打开带 `?` 的浏览器 URL 时请加引号，例如：`"http://127.0.0.1:3000/?scene=product-map.excalidraw"`。
 
 Library 命令：
 
@@ -136,15 +154,17 @@ Library 搜索是只读操作。只有当用户明确指定要安装某个公共
 Skill 会指导 Agent：
 
 - 先判断表达策略；
+- 对复杂 brief 先使用 `excalidraw-codex plan`，把意图、视觉组织方式、阅读路径、语言、文案密度和 library 使用意图显式化；
 - 只在结构天然适合 Mermaid 时使用 Mermaid；
 - 生成可编辑的 `.excalidraw` 文件；
-- 把 libraries 当作可选视觉积木，而不是强制装饰；
+- 先读取 `excalidraw-codex config`，并返回真实配置的 `artifactsDir`；
+- 把 recipes 和 libraries 当作可选视觉积木，而不是僵硬模板或强制装饰；
 - 执行 validate 和 QA，但不把每个 warning 都变成僵硬的自动排版；
 - 导出 PNG/SVG 预览；
 - 打开本地浏览器工作台让用户编辑；
 - 在用户编辑后，通过 inspect 或 diff 读回画布，再继续协作。
 
-画布文字默认跟随用户当前对话语言。用户用中文交流时，图里的标题、节点、注释和 UI 文案默认使用中文；用户用英文交流时，则默认使用英文。
+画布文字默认跟随用户当前对话语言。用户用中文交流时，图里的标题、节点、注释和 UI 文案默认使用中文；用户用英文交流时，则默认使用英文。产品名、API 名、文件名和代码标识符保留原文。
 
 ## 运行配置
 

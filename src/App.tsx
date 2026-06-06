@@ -93,6 +93,7 @@ export default function App() {
   const [initialData, setInitialData] = useState<InitialSceneData>(createBlankScene());
   const [canvasKey, setCanvasKey] = useState(0);
   const [status, setStatus] = useState("Ready");
+  const [statusTone, setStatusTone] = useState<"neutral" | "error">("neutral");
   const [isBusy, setIsBusy] = useState(false);
 
   const activeSceneLabel = useMemo(() => normalizeFileName(sceneName), [sceneName]);
@@ -104,6 +105,7 @@ export default function App() {
     }
     const data = (await response.json()) as SceneSummary[];
     setScenes(data);
+    setStatusTone("neutral");
   }, []);
 
   const loadScene = useCallback(
@@ -120,9 +122,11 @@ export default function App() {
         setInitialData(toInitialData(scene, scene.elements.length > 0));
         setCanvasKey((value) => value + 1);
         setStatus(`Loaded ${name}`);
+        setStatusTone("neutral");
         window.history.replaceState(null, "", `/?scene=${encodeURIComponent(name)}`);
       } catch (error) {
         setStatus(error instanceof Error ? error.message : String(error));
+        setStatusTone("error");
       } finally {
         setIsBusy(false);
       }
@@ -140,6 +144,7 @@ export default function App() {
       })
       .catch((error: unknown) => {
         setStatus(error instanceof Error ? error.message : String(error));
+        setStatusTone("error");
       });
   }, [loadScene, refreshScenes]);
 
@@ -160,19 +165,23 @@ export default function App() {
       setSceneName(targetName);
       window.history.replaceState(null, "", `/?scene=${encodeURIComponent(targetName)}`);
       setStatus(`Saved ${targetName}; refreshing preview`);
+      setStatusTone("neutral");
       try {
         await refreshPreview(targetName);
         setStatus(`Saved ${targetName}`);
+        setStatusTone("neutral");
       } catch (previewError) {
         setStatus(
           previewError instanceof Error
             ? `Saved ${targetName}; preview refresh failed: ${previewError.message}`
             : `Saved ${targetName}; preview refresh failed`
         );
+        setStatusTone("error");
       }
       await refreshScenes();
     } catch (error) {
       setStatus(error instanceof Error ? error.message : String(error));
+      setStatusTone("error");
     } finally {
       setIsBusy(false);
     }
@@ -207,7 +216,12 @@ export default function App() {
               className="ghost-icon-button"
               type="button"
               title="Refresh scenes"
-              onClick={() => void refreshScenes()}
+              onClick={() => {
+                refreshScenes().catch((error: unknown) => {
+                  setStatus(error instanceof Error ? error.message : String(error));
+                  setStatusTone("error");
+                });
+              }}
             >
               <RefreshCw size={16} />
             </button>
@@ -223,6 +237,9 @@ export default function App() {
             <Save size={14} />
             Save
           </button>
+          <p className={`codex-status ${statusTone === "error" ? "error" : ""}`} title={status}>
+            {status}
+          </p>
         </div>
 
         <section className="codex-gallery-scroll" aria-label="Generated scenes">
