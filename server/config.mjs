@@ -31,6 +31,40 @@ function resolveConfiguredPath(value, fallback) {
 
 const config = readConfigFile();
 
+export const FONT_FAMILY = {
+  Virgil: 1,
+  Helvetica: 2,
+  Cascadia: 3,
+  Excalifont: 5,
+  Nunito: 6,
+  "Lilita One": 7,
+  "Comic Shanns": 8,
+  "Liberation Sans": 9
+};
+
+function normalizeFontFamilyName(value) {
+  const text = String(value || "").trim();
+  const matched = Object.keys(FONT_FAMILY).find((name) => name.toLowerCase() === text.toLowerCase());
+  return matched || "Nunito";
+}
+
+export const defaultFontFamilyName = normalizeFontFamilyName(
+  process.env.EXCALIDRAW_CODEX_FONT || config.defaultFontFamily || config.fontFamily || "Nunito"
+);
+
+export const defaultFontFamily = FONT_FAMILY[defaultFontFamilyName];
+
+function normalizeNonNegativeInteger(value, fallback) {
+  const number = Number(value ?? fallback);
+  if (!Number.isFinite(number) || number < 0) return fallback;
+  return Math.floor(number);
+}
+
+export const snapshotRetentionLimit = normalizeNonNegativeInteger(
+  process.env.EXCALIDRAW_CODEX_SNAPSHOT_LIMIT ?? config.snapshotRetentionLimit,
+  80
+);
+
 export const workspaceRoot = resolveConfiguredPath(
   process.env.EXCALIDRAW_CODEX_HOME || config.workspaceRoot,
   packageRoot
@@ -49,6 +83,9 @@ export function getRuntimeConfig() {
     workspaceRoot,
     artifactsDir,
     snapshotsDir,
+    snapshotRetentionLimit,
+    defaultFontFamily,
+    defaultFontFamilyName,
     configDir,
     configPath,
     hasConfigFile: Object.keys(config).length > 0

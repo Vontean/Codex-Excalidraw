@@ -2,6 +2,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import {
   artifactsDir,
+  snapshotRetentionLimit,
   snapshotsDir
 } from "./config.mjs";
 
@@ -42,6 +43,28 @@ function snapshotTimestamp(date = new Date()) {
   return date.toISOString().replace(/[:.]/g, "-");
 }
 
+async function resolveUniqueSnapshotPath(dir, snapshotName) {
+  const extension = ".excalidraw";
+  const baseName = snapshotName.endsWith(extension)
+    ? snapshotName.slice(0, -extension.length)
+    : snapshotName;
+
+  for (let index = 0; index < 1000; index += 1) {
+    const name = index === 0 ? `${baseName}${extension}` : `${baseName}-${index}${extension}`;
+    const filePath = path.join(dir, name);
+    try {
+      await fs.access(filePath);
+    } catch (error) {
+      if (error?.code === "ENOENT") {
+        return { name, path: filePath };
+      }
+      throw error;
+    }
+  }
+
+  throw new Error(`Could not allocate a unique snapshot name for ${snapshotName}`);
+}
+
 export async function readScene(name) {
   const raw = await fs.readFile(scenePath(name), "utf8");
   return JSON.parse(raw);
@@ -54,19 +77,49 @@ export async function writeScene(name, scene) {
   return fileName;
 }
 
+export async function deleteScene(name) {
+  await ensureArtifactsDir();
+  const fileName = normalizeSceneName(name);
+  const sourcePath = scenePath(fileName);
+  const previewPaths = ["png", "svg"].map((extension) =>
+    path.join(artifactsDir, fileName.replace(/\.excalidraw$/, `.${extension}`))
+  );
+  const sceneSnapshotsDir = path.join(snapshotsDir, sceneSlug(fileName));
+
+  await fs.unlink(sourcePath);
+  await Promise.all([
+    ...previewPaths.map((filePath) => fs.rm(filePath, { force: true })),
+    fs.rm(sceneSnapshotsDir, { force: true, recursive: true })
+  ]);
+
+  return {
+    scene: fileName,
+    deleted: {
+      source: sourcePath,
+      previews: previewPaths,
+      snapshotsDir: sceneSnapshotsDir
+    }
+  };
+}
+
 export async function createSnapshot(name, options = {}) {
   await ensureArtifactsDir();
   const fileName = normalizeSceneName(name);
   const raw = await fs.readFile(scenePath(fileName), "utf8");
   const dir = await ensureSceneSnapshotsDir(fileName);
   const label = safeLabel(options.label);
-  const snapshotName = `${snapshotTimestamp()}${label ? `-${label}` : ""}.excalidraw`;
-  const filePath = path.join(dir, snapshotName);
+  const baseSnapshotName = `${snapshotTimestamp()}${label ? `-${label}` : ""}.excalidraw`;
+  const { name: snapshotName, path: filePath } = await resolveUniqueSnapshotPath(dir, baseSnapshotName);
   await fs.writeFile(filePath, raw, "utf8");
+  const prunedSnapshots = await pruneSnapshots(fileName, {
+    keep: options.keep ?? options.retentionLimit ?? snapshotRetentionLimit,
+    protect: snapshotName
+  });
   return {
     scene: fileName,
     name: snapshotName,
-    path: filePath
+    path: filePath,
+    prunedSnapshots
   };
 }
 
@@ -96,6 +149,28 @@ export async function listSnapshots(name) {
       })
   );
   return snapshots.sort((a, b) => b.name.localeCompare(a.name));
+}
+
+export async function pruneSnapshots(name, options = {}) {
+  const keep = Number(options.keep);
+  if (!Number.isFinite(keep) || keep <= 0) return [];
+
+  const fileName = normalizeSceneName(name);
+  const snapshots = await listSnapshots(fileName);
+  const protectedName = options.protect ? String(options.protect) : "";
+  const protectedSnapshots = protectedName
+    ? snapshots.filter((snapshot) => snapshot.name === protectedName)
+    : [];
+  const otherSnapshots = snapshots.filter((snapshot) => snapshot.name !== protectedName);
+  const removable = [...protectedSnapshots, ...otherSnapshots].slice(Math.floor(keep));
+  const pruned = [];
+
+  for (const snapshot of removable) {
+    await fs.rm(snapshot.path, { force: true });
+    pruned.push(snapshot);
+  }
+
+  return pruned;
 }
 
 export async function resolveSnapshotPath(name, reference = "latest") {

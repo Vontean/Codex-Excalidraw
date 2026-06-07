@@ -2,6 +2,7 @@ import {
   createExpressionPlan,
   listExpressionTemplates
 } from "./expression-plan.mjs";
+import { defaultFontFamily } from "./config.mjs";
 
 const SCENE_SOURCE = "https://codex.local/excalidraw-codex";
 
@@ -115,6 +116,7 @@ function textElement(base) {
     height: base.height || Math.ceil((base.fontSize || 20) * 1.35),
     text: compactText(base.text, base.maxTextLength || 72),
     fontSize: base.fontSize || 20,
+    fontFamily: Number(base.fontFamily || defaultFontFamily),
     strokeColor: base.strokeColor || "#1e1e1e",
     backgroundColor: "transparent",
     textAlign: base.textAlign || "center",
@@ -894,7 +896,7 @@ export function generateSceneFromBrief(input = {}) {
       elements,
       appState: {
         viewBackgroundColor: "#ffffff",
-        currentItemFontFamily: 1,
+        currentItemFontFamily: defaultFontFamily,
         codex: {
           generator: "from-brief",
           template,

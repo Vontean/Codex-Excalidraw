@@ -486,6 +486,48 @@ export async function selectLibrariesForBrief(brief, options = {}) {
   return matches.filter((library) => library.score >= minScore);
 }
 
+export async function listInstalledLibraryItems() {
+  const registry = await readRegistry();
+  const librarySummaries = [];
+  const libraryItems = [];
+
+  for (const library of registry.libraries) {
+    const libraryFile = await readLibraryFile(library);
+    const items = activeLibraryItems(libraryFile);
+    let usableCount = 0;
+
+    items.forEach((item, index) => {
+      const elements = Array.isArray(item.elements)
+        ? item.elements.filter((element) => element && !element.isDeleted)
+        : [];
+      if (!elements.length) return;
+
+      usableCount += 1;
+      libraryItems.push({
+        ...item,
+        id: item.id || `${library.id}-${index + 1}`,
+        status: item.status || "published",
+        created: Number(item.created || 0),
+        name: item.name || `${library.name} ${index + 1}`,
+        elements
+      });
+    });
+
+    librarySummaries.push(compactLibrary(library, {
+      itemCount: items.length,
+      usableItemCount: usableCount
+    }));
+  }
+
+  return {
+    version: registry.version,
+    libraryCount: librarySummaries.length,
+    itemCount: libraryItems.length,
+    libraries: librarySummaries,
+    libraryItems
+  };
+}
+
 export async function inspectRegisteredLibrary(id) {
   const registry = await readRegistry();
   const library = registry.libraries.find((item) => item.id === id || item.name.toLowerCase() === String(id).toLowerCase());

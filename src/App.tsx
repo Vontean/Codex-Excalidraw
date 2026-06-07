@@ -7,7 +7,8 @@ import "@excalidraw/excalidraw/index.css";
 import {
   FolderOpen,
   RefreshCw,
-  Save
+  Save,
+  X
 } from "lucide-react";
 import {
   createBlankScene,
@@ -22,6 +23,11 @@ type ExcalidrawApi = {
     appState?: Record<string, unknown>;
     files?: Record<string, unknown>;
   }) => void;
+  updateLibrary: (library: {
+    libraryItems: unknown[] | Promise<unknown[]>;
+    merge?: boolean;
+    defaultStatus?: "published" | "unpublished";
+  }) => Promise<unknown>;
   resetScene: () => void;
 };
 
@@ -29,7 +35,26 @@ type InitialSceneData = ExcalidrawScene & {
   scrollToContent?: boolean;
 };
 
+type InstalledLibrariesResponse = {
+  ok: boolean;
+  itemCount: number;
+  libraryItems: unknown[];
+};
+
+type LiveSceneResponse = {
+  ok: boolean;
+  scene: string;
+  live: boolean;
+  updatedAt: string;
+  revision: string;
+  clientId: string;
+  source: string;
+  activeElementCount: number;
+  sceneData?: ExcalidrawScene;
+};
+
 const FALLBACK_SCENE_NAME = "untitled.excalidraw";
+const DEFAULT_FONT_FAMILY = 6;
 
 function normalizeFileName(value: string) {
   const trimmed = value.trim() || FALLBACK_SCENE_NAME;
@@ -87,16 +112,85 @@ async function refreshPreview(sceneName: string) {
 
 export default function App() {
   const apiRef = useRef<ExcalidrawApi | null>(null);
-  const latestSceneRef = useRef<ExcalidrawScene>(createBlankScene());
+  const latestSceneRef = useRef<ExcalidrawScene>(createBlankScene(DEFAULT_FONT_FAMILY));
+  const liveSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const liveSyncRevisionRef = useRef(0);
+  const liveSyncClientIdRef = useRef(`workbench-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`);
+  const liveAppliedRevisionRef = useRef<string | null>(null);
+  const localChangeAtRef = useRef(0);
+  const suppressLiveSyncUntilRef = useRef(0);
+  const [excalidrawApi, setExcalidrawApi] = useState<ExcalidrawApi | null>(null);
   const [sceneName, setSceneName] = useState(FALLBACK_SCENE_NAME);
   const [scenes, setScenes] = useState<SceneSummary[]>([]);
-  const [initialData, setInitialData] = useState<InitialSceneData>(createBlankScene());
+  const [defaultFontFamily, setDefaultFontFamily] = useState(DEFAULT_FONT_FAMILY);
+  const [installedLibraryItems, setInstalledLibraryItems] = useState<unknown[]>([]);
+  const [initialData, setInitialData] = useState<InitialSceneData>(createBlankScene(DEFAULT_FONT_FAMILY));
   const [canvasKey, setCanvasKey] = useState(0);
   const [status, setStatus] = useState("Ready");
   const [statusTone, setStatusTone] = useState<"neutral" | "error">("neutral");
   const [isBusy, setIsBusy] = useState(false);
 
   const activeSceneLabel = useMemo(() => normalizeFileName(sceneName), [sceneName]);
+
+  const syncLiveScene = useCallback(async (name: string, scene: ExcalidrawScene) => {
+    liveSyncRevisionRef.current += 1;
+    const response = await fetch(`/api/live-scenes/${encodeURIComponent(name)}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        scene,
+        revision: `${Date.now()}-${liveSyncRevisionRef.current}`,
+        clientId: liveSyncClientIdRef.current,
+        source: "workbench"
+      })
+    });
+    if (!response.ok) {
+      throw new Error(`Unable to sync live canvas for ${name}`);
+    }
+    const live = (await response.json()) as LiveSceneResponse;
+    liveAppliedRevisionRef.current = live.revision;
+  }, []);
+
+  const scheduleLiveSync = useCallback(
+    (scene: ExcalidrawScene) => {
+      const targetName = normalizeFileName(sceneName);
+      if (liveSyncTimerRef.current) {
+        clearTimeout(liveSyncTimerRef.current);
+      }
+      liveSyncTimerRef.current = setTimeout(() => {
+        syncLiveScene(targetName, scene).catch((error: unknown) => {
+          setStatus(error instanceof Error ? error.message : String(error));
+          setStatusTone("error");
+        });
+      }, 650);
+    },
+    [sceneName, syncLiveScene]
+  );
+
+  const applyRemoteLiveScene = useCallback(
+    (live: LiveSceneResponse) => {
+      if (!excalidrawApi || !live.sceneData) return;
+      const normalized = normalizeLoadedScene(live.sceneData);
+      liveAppliedRevisionRef.current = live.revision;
+      latestSceneRef.current = normalized;
+      suppressLiveSyncUntilRef.current = Date.now() + 1600;
+      if (liveSyncTimerRef.current) {
+        clearTimeout(liveSyncTimerRef.current);
+        liveSyncTimerRef.current = null;
+      }
+      excalidrawApi.updateScene({
+        elements: normalized.elements,
+        appState: normalized.appState,
+        files: normalized.files
+      });
+      setInitialData(toInitialData(normalized, normalized.elements.length > 0));
+      setStatus(`Applied live update from ${live.source}`);
+      setStatusTone("neutral");
+    },
+    [excalidrawApi]
+  );
 
   const refreshScenes = useCallback(async () => {
     const response = await fetch("/api/scenes");
@@ -118,6 +212,8 @@ export default function App() {
         }
         const scene = normalizeLoadedScene((await response.json()) as ExcalidrawScene);
         latestSceneRef.current = scene;
+        liveAppliedRevisionRef.current = null;
+        localChangeAtRef.current = 0;
         setSceneName(name);
         setInitialData(toInitialData(scene, scene.elements.length > 0));
         setCanvasKey((value) => value + 1);
@@ -135,6 +231,35 @@ export default function App() {
   );
 
   useEffect(() => {
+    fetch("/api/health")
+      .then(async (response) => {
+        if (!response.ok) return;
+        const health = (await response.json()) as { defaultFontFamily?: number };
+        if (Number.isFinite(Number(health.defaultFontFamily))) {
+          const fontFamily = Number(health.defaultFontFamily);
+          setDefaultFontFamily(fontFamily);
+          if (!getSceneNameFromUrl()) {
+            const blank = createBlankScene(fontFamily);
+            latestSceneRef.current = blank;
+            setInitialData(blank);
+          }
+        }
+      })
+      .catch(() => undefined);
+
+    fetch("/api/libraries/items")
+      .then(async (response) => {
+        if (!response.ok) {
+          throw new Error(`Unable to load installed libraries: ${response.status}`);
+        }
+        const data = (await response.json()) as InstalledLibrariesResponse;
+        setInstalledLibraryItems(Array.isArray(data.libraryItems) ? data.libraryItems : []);
+      })
+      .catch((error: unknown) => {
+        setStatus(error instanceof Error ? error.message : String(error));
+        setStatusTone("error");
+      });
+
     refreshScenes()
       .then(() => {
         const urlScene = getSceneNameFromUrl();
@@ -147,6 +272,71 @@ export default function App() {
         setStatusTone("error");
       });
   }, [loadScene, refreshScenes]);
+
+  useEffect(() => {
+    if (!excalidrawApi) return;
+    let cancelled = false;
+    const pollLiveScene = async () => {
+      try {
+        const targetName = activeSceneLabel;
+        const response = await fetch(`/api/live-scenes/${encodeURIComponent(targetName)}?includeScene=true`);
+        if (!response.ok) return;
+        const live = (await response.json()) as LiveSceneResponse;
+        if (cancelled || !live.sceneData) return;
+        if (live.clientId === liveSyncClientIdRef.current) {
+          liveAppliedRevisionRef.current = live.revision;
+          return;
+        }
+        if (live.revision === liveAppliedRevisionRef.current) return;
+        const liveUpdatedAt = Date.parse(live.updatedAt);
+        if (Number.isFinite(liveUpdatedAt) && localChangeAtRef.current > liveUpdatedAt + 250) {
+          return;
+        }
+        applyRemoteLiveScene(live);
+      } catch {
+        // Live updates are opportunistic; keep the workbench usable if polling fails.
+      }
+    };
+
+    const interval = window.setInterval(() => {
+      void pollLiveScene();
+    }, 1200);
+    void pollLiveScene();
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [activeSceneLabel, applyRemoteLiveScene, excalidrawApi]);
+
+  useEffect(() => {
+    return () => {
+      if (liveSyncTimerRef.current) {
+        clearTimeout(liveSyncTimerRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!excalidrawApi || installedLibraryItems.length === 0) return;
+
+    let cancelled = false;
+    excalidrawApi
+      .updateLibrary({
+        libraryItems: installedLibraryItems,
+        merge: true,
+        defaultStatus: "published"
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        setStatus(error instanceof Error ? error.message : String(error));
+        setStatusTone("error");
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [excalidrawApi, installedLibraryItems]);
 
   const saveScene = useCallback(async () => {
     const targetName = normalizeFileName(sceneName);
@@ -187,21 +377,78 @@ export default function App() {
     }
   }, [refreshScenes, sceneName]);
 
+  const deleteScene = useCallback(
+    async (name: string) => {
+      const targetName = normalizeFileName(name);
+      const shouldDelete = window.confirm(`Delete ${targetName}?`);
+      if (!shouldDelete) return;
+
+      setIsBusy(true);
+      try {
+        const response = await fetch(`/api/scenes/${encodeURIComponent(targetName)}`, {
+          method: "DELETE"
+        });
+        if (!response.ok) {
+          throw new Error(`Unable to delete ${targetName}`);
+        }
+
+        const remainingScenes = scenes.filter((scene) => scene.name !== targetName);
+        setScenes(remainingScenes);
+        setStatus(`Deleted ${targetName}`);
+        setStatusTone("neutral");
+
+        if (targetName === activeSceneLabel) {
+          const nextScene = remainingScenes[0];
+          if (nextScene) {
+            await loadScene(nextScene.name);
+          } else {
+            const blank = createBlankScene(defaultFontFamily);
+            latestSceneRef.current = blank;
+            setSceneName(FALLBACK_SCENE_NAME);
+            setInitialData(blank);
+            setCanvasKey((value) => value + 1);
+            window.history.replaceState(null, "", "/");
+          }
+        }
+
+        await refreshScenes();
+      } catch (error) {
+        setStatus(error instanceof Error ? error.message : String(error));
+        setStatusTone("error");
+      } finally {
+        setIsBusy(false);
+      }
+    },
+    [activeSceneLabel, defaultFontFamily, loadScene, refreshScenes, scenes]
+  );
+
+  const blankScene = useMemo(() => createBlankScene(defaultFontFamily), [defaultFontFamily]);
+
   return (
     <main className="flex h-screen w-screen flex-col overflow-hidden bg-white text-ink">
       <section className="min-w-0 flex-1 bg-white">
         <Excalidraw
           key={canvasKey}
-          initialData={initialData as Parameters<typeof Excalidraw>[0]["initialData"]}
+          initialData={(initialData || blankScene) as Parameters<typeof Excalidraw>[0]["initialData"]}
           excalidrawAPI={(api) => {
-            apiRef.current = api as unknown as ExcalidrawApi;
+            const nextApi = api as unknown as ExcalidrawApi;
+            if (apiRef.current !== nextApi) {
+              apiRef.current = nextApi;
+              setExcalidrawApi(nextApi);
+            }
           }}
           onChange={(elements, appState, files) => {
-            latestSceneRef.current = toScene(
+            const nextScene = toScene(
               elements as unknown[],
               appState as unknown as Record<string, unknown>,
               files as unknown as Record<string, unknown>
             );
+            latestSceneRef.current = nextScene;
+            if (Date.now() < suppressLiveSyncUntilRef.current) {
+              return;
+            }
+            localChangeAtRef.current = Date.now();
+            scheduleLiveSync(nextScene);
           }}
         />
       </section>
@@ -245,28 +492,42 @@ export default function App() {
         <section className="codex-gallery-scroll" aria-label="Generated scenes">
           <div className="flex h-full gap-3">
             {scenes.map((scene) => (
-              <button
-                key={scene.name}
-                type="button"
-                className={`gallery-card ${scene.name === activeSceneLabel ? "active" : ""}`}
-                onClick={() => void loadScene(scene.name)}
-                title={`${scene.name} · ${formatDate(scene.modifiedAt)}`}
-              >
-                <span className="gallery-preview">
-                  {scene.previewUrl ? (
-                    <img
-                      src={`${scene.previewUrl}?v=${encodeURIComponent(scene.previewModifiedAt ?? scene.modifiedAt)}`}
-                      alt=""
-                      loading="lazy"
-                      decoding="async"
-                      draggable={false}
-                    />
-                  ) : (
-                    <FolderOpen size={20} />
-                  )}
-                </span>
-                <span className="mt-1 block truncate text-xs font-medium">{scene.name}</span>
-              </button>
+              <div className="gallery-card-shell" key={scene.name}>
+                <button
+                  type="button"
+                  className={`gallery-card ${scene.name === activeSceneLabel ? "active" : ""}`}
+                  onClick={() => void loadScene(scene.name)}
+                  title={`${scene.name} · ${formatDate(scene.modifiedAt)}`}
+                >
+                  <span className="gallery-preview">
+                    {scene.previewUrl ? (
+                      <img
+                        src={`${scene.previewUrl}?v=${encodeURIComponent(scene.previewModifiedAt ?? scene.modifiedAt)}`}
+                        alt=""
+                        loading="lazy"
+                        decoding="async"
+                        draggable={false}
+                      />
+                    ) : (
+                      <FolderOpen size={20} />
+                    )}
+                  </span>
+                  <span className="mt-1 block truncate text-xs font-medium">{scene.name}</span>
+                </button>
+                <button
+                  type="button"
+                  className="gallery-delete-button"
+                  title={`Delete ${scene.name}`}
+                  aria-label={`Delete ${scene.name}`}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    void deleteScene(scene.name);
+                  }}
+                  disabled={isBusy}
+                >
+                  <X size={14} strokeWidth={2.2} />
+                </button>
+              </div>
             ))}
             {scenes.length === 0 ? (
               <div className="flex h-full min-w-[220px] items-center rounded-xl border border-dashed border-neutral-300 bg-white px-4 text-sm text-neutral-500">

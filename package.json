@@ -19,12 +19,37 @@
   "bin": {
     "excalidraw-codex": "./bin/excalidraw-codex.mjs"
   },
+  "files": [
+    ".env.example",
+    "bin/",
+    "export.html",
+    "index.html",
+    "libraries/",
+    "LICENSE",
+    "mcp/",
+    "mermaid.html",
+    "postcss.config.js",
+    "README.md",
+    "README.zh-CN.md",
+    "scripts/",
+    "server/",
+    "skills/",
+    "src/",
+    "tailwind.config.js",
+    "tsconfig.json",
+    "vite.config.ts"
+  ],
   "scripts": {
     "setup": "node ./scripts/install.mjs",
     "dev": "node ./bin/excalidraw-codex.mjs serve",
     "build": "tsc --noEmit && vite build",
     "preview": "NODE_ENV=production node ./bin/excalidraw-codex.mjs serve",
-    "cli": "node ./bin/excalidraw-codex.mjs"
+    "cli": "node ./bin/excalidraw-codex.mjs",
+    "mcp": "node ./bin/excalidraw-codex.mjs mcp",
+    "test:mcp": "node ./scripts/smoke-mcp.mjs",
+    "test:live": "node ./scripts/smoke-live-bridge.mjs",
+    "test": "npm run test:mcp && npm run test:live",
+    "verify": "npm run build && npm run test"
   },
   "engines": {
     "node": ">=20"
@@ -32,6 +57,7 @@
   "dependencies": {
     "@excalidraw/excalidraw": "0.18.1",
     "@excalidraw/mermaid-to-excalidraw": "2.2.2",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "express": "^4.18.3",
     "lucide-react": "^0.468.0",
     "playwright": "^1.56.0",

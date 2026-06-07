@@ -9,11 +9,14 @@ import {
   diffScenes,
   diffSceneFromSnapshot,
   exportSceneAsset,
+  exportSceneToExcalidrawUrl,
   getRuntimeConfig,
+  isCompatibleHealth,
   inspectSceneFile,
   listBriefTemplates,
   listScenes,
   listSnapshots,
+  missingServerCapabilities,
   normalizeSceneName,
   patchSceneFile,
   polishSceneFile,
@@ -38,17 +41,22 @@ import {
   selectLibrariesForBrief,
   validateLibraryRegistry
 } from "../server/library-registry.mjs";
-
-const SCENE_SOURCE = "https://codex.local/excalidraw-codex";
+import { convertMermaidToScene } from "../server/mermaid-scene.mjs";
+import { listMcpTools, startMcpServer } from "../mcp/server.mjs";
 
 function printHelp() {
   console.log(`excalidraw-codex
 
 Usage:
+  # Agent canvas bridge
   excalidraw-codex serve [--port 3000] [--host 127.0.0.1] [--open] [--dev]
-  excalidraw-codex from-mermaid <input.md|-> --out|--scene <name.excalidraw>
-  excalidraw-codex plan <input.txt|-> [--template auto|architecture|product-board|page-flow|wireframe|annotated-ui-map|implementation-plan] [--json]
-  excalidraw-codex from-brief <input.txt|-> --out|--scene <name.excalidraw> [--template auto|architecture|product-board|page-flow|wireframe|annotated-ui-map|implementation-plan] [--plan plan.json] [--preview] [--no-polish] [--libraries auto|none]
+  excalidraw-codex config [--json]
+  excalidraw-codex doctor [--json]
+  excalidraw-codex mcp
+  excalidraw-codex mcp-config [--json]
+  excalidraw-codex open <scene.excalidraw> [--port 3000]
+
+  # Libraries
   excalidraw-codex templates
   excalidraw-codex library list [--json] [--stats]
   excalidraw-codex library search <query> [--json] [--limit 5]
@@ -58,11 +66,12 @@ Usage:
   excalidraw-codex library inspect <id> [--json]
   excalidraw-codex library insert <scene.excalidraw> <library-id> <item-index|item-name> [--x 80] [--y 80] [--scale 1]
   excalidraw-codex library validate [--json]
+
+  # Deterministic file operations
   excalidraw-codex validate <scene.excalidraw>
-  excalidraw-codex config [--json]
   excalidraw-codex export <scene.excalidraw> --format png|svg|all [--out <file>] [--require-qa] [--skip-qa]
-  excalidraw-codex open <scene.excalidraw> [--port 3000]
-  excalidraw-codex snapshot <scene.excalidraw> [--label <name>]
+  excalidraw-codex share <scene.excalidraw> [--dry-run] [--json] [--no-files] [--include-custom-data]
+  excalidraw-codex snapshot <scene.excalidraw> [--label <name>] [--keep <count>]
   excalidraw-codex snapshots <scene.excalidraw>
   excalidraw-codex restore <scene.excalidraw> [--from latest|snapshot.excalidraw]
   excalidraw-codex read <scene.excalidraw> [--json]
@@ -75,7 +84,14 @@ Usage:
   excalidraw-codex qa <scene.excalidraw> [--json]
   excalidraw-codex gallery-refresh [scene.excalidraw|--all] [--format png|svg]
 
-Scenes are stored in artifacts/excalidraw by default.`);
+  # Legacy quick-draft fallbacks
+  excalidraw-codex from-mermaid <input.md|-> --out|--scene <name.excalidraw>
+  excalidraw-codex plan <input.txt|-> [--template auto|architecture|product-board|page-flow|wireframe|annotated-ui-map|implementation-plan] [--json]
+  excalidraw-codex from-brief <input.txt|-> --out|--scene <name.excalidraw> [--template auto|architecture|product-board|page-flow|wireframe|annotated-ui-map|implementation-plan] [--plan plan.json] [--preview] [--no-polish] [--libraries auto|none]
+
+Scenes are stored in artifacts/excalidraw by default.
+
+Primary agent workflow: use the MCP canvas tools for drawing/read-back, and keep CLI commands for deterministic setup, serving, libraries, export, and file management.`);
 }
 
 const COMMAND_USAGE = {
@@ -85,6 +101,11 @@ const COMMAND_USAGE = {
   "from-brief": "Usage: excalidraw-codex from-brief <input.txt|-> --scene <name.excalidraw> [--template auto|architecture|product-board|page-flow|wireframe|annotated-ui-map|implementation-plan] [--preview]\n       excalidraw-codex from-brief <input.txt|-> --out ./path/to/file.excalidraw [--preview]",
   validate: "Usage: excalidraw-codex validate <scene.excalidraw|./path/to/scene.excalidraw>",
   export: "Usage: excalidraw-codex export <scene.excalidraw|./path/to/scene.excalidraw> --format png|svg|all [--out <file>] [--require-qa] [--skip-qa]",
+  share: "Usage: excalidraw-codex share <scene.excalidraw|./path/to/scene.excalidraw> [--dry-run] [--json] [--no-files] [--include-custom-data]\n\nUploads an encrypted scene payload to excalidraw.com only when explicitly invoked. Use --dry-run to verify payload generation without upload.",
+  snapshot: "Usage: excalidraw-codex snapshot <scene.excalidraw|./path/to/scene.excalidraw> [--label <name>] [--keep <count>]\n\nSnapshots are pruned per scene according to EXCALIDRAW_CODEX_SNAPSHOT_LIMIT or --keep. Use 0 to disable pruning for this command.",
+  mcp: "Usage: excalidraw-codex mcp\n\nStarts the Excalidraw Codex MCP server over stdio. Configure Codex or Claude Code to run this command as an MCP server.",
+  "mcp-config": "Usage: excalidraw-codex mcp-config [--json]\n\nPrints an MCP config snippet for agents.",
+  doctor: "Usage: excalidraw-codex doctor [--json]\n\nChecks local config, MCP tools, library registry, server health, and live canvas API.",
   open: "Usage: excalidraw-codex open <scene.excalidraw> [--port 3000]",
   read: "Usage: excalidraw-codex read <scene.excalidraw|./path/to/scene.excalidraw> [--json]",
   inspect: "Usage: excalidraw-codex inspect <scene.excalidraw|./path/to/scene.excalidraw> [--from latest|snapshot.excalidraw] [--json]",
@@ -211,42 +232,138 @@ async function readInput(inputPath) {
   return fs.readFile(path.resolve(process.cwd(), inputPath), "utf8");
 }
 
-async function ensureBuild() {
-  const required = ["index.html", "export.html", "mermaid.html"];
+const BUILD_REQUIRED_FILES = ["index.html", "export.html", "mermaid.html"];
+const BUILD_SOURCE_ENTRIES = [
+  "src",
+  "index.html",
+  "export.html",
+  "mermaid.html",
+  "vite.config.ts",
+  "tailwind.config.js",
+  "postcss.config.js",
+  "tsconfig.json",
+  "package.json",
+  "package-lock.json"
+];
+
+async function collectBuildSourceFiles(entry) {
+  const absolutePath = path.join(projectRoot, entry);
+  let stat;
   try {
-    await Promise.all(required.map((file) => fs.access(path.join(projectRoot, "dist", file))));
-  } catch {
-    await new Promise((resolve, reject) => {
-      const child = spawn("npm", ["run", "build"], {
-        cwd: projectRoot,
-        stdio: "inherit",
-        env: process.env
-      });
-      child.on("exit", (code) => {
-        if (code === 0) {
-          resolve();
-        } else {
-          reject(new Error(`Build failed with exit code ${code}`));
-        }
-      });
-      child.on("error", reject);
-    });
+    stat = await fs.stat(absolutePath);
+  } catch (error) {
+    if (error?.code === "ENOENT") return [];
+    throw error;
   }
+  if (!stat.isDirectory()) {
+    return [{ path: absolutePath, relativePath: entry, mtimeMs: stat.mtimeMs }];
+  }
+  const names = await fs.readdir(absolutePath);
+  const nested = await Promise.all(
+    names
+      .filter((name) => !name.startsWith("."))
+      .map((name) => collectBuildSourceFiles(path.join(entry, name)))
+  );
+  return nested.flat();
 }
 
-function createScene(elements, files = {}, appState = {}) {
+async function getBuildStatus() {
+  const distDir = path.join(projectRoot, "dist");
+  const required = await Promise.all(
+    BUILD_REQUIRED_FILES.map(async (file) => {
+      const filePath = path.join(distDir, file);
+      try {
+        const stat = await fs.stat(filePath);
+        return { file, path: filePath, exists: true, mtimeMs: stat.mtimeMs };
+      } catch (error) {
+        if (error?.code === "ENOENT") return { file, path: filePath, exists: false };
+        throw error;
+      }
+    })
+  );
+  const missing = required.filter((file) => !file.exists).map((file) => file.file);
+  const sourceFiles = (await Promise.all(BUILD_SOURCE_ENTRIES.map(collectBuildSourceFiles))).flat();
+  const newestSource = sourceFiles.reduce((latest, file) => (
+    !latest || file.mtimeMs > latest.mtimeMs ? file : latest
+  ), null);
+  const existingRequired = required.filter((file) => file.exists);
+  const oldestBuild = existingRequired.reduce((oldest, file) => (
+    !oldest || file.mtimeMs < oldest.mtimeMs ? file : oldest
+  ), null);
+  const stale = Boolean(
+    missing.length === 0 &&
+      newestSource &&
+      oldestBuild &&
+      newestSource.mtimeMs > oldestBuild.mtimeMs + 1000
+  );
+
   return {
-    type: "excalidraw",
-    version: 2,
-    source: SCENE_SOURCE,
-    elements,
-    appState: {
-      viewBackgroundColor: "#ffffff",
-      currentItemFontFamily: 1,
-      ...appState
-    },
-    files
+    ok: missing.length === 0 && !stale,
+    distDir,
+    missing,
+    stale,
+    sourceCount: sourceFiles.length,
+    newestSource: newestSource
+      ? {
+          path: newestSource.relativePath,
+          modifiedAt: new Date(newestSource.mtimeMs).toISOString()
+        }
+      : undefined,
+    oldestBuild: oldestBuild
+      ? {
+          file: oldestBuild.file,
+          modifiedAt: new Date(oldestBuild.mtimeMs).toISOString()
+        }
+      : undefined
   };
+}
+
+async function runBuild(reason) {
+  if (reason) {
+    console.log(`Building the workbench (${reason})...`);
+  }
+  await new Promise((resolve, reject) => {
+    const child = spawn("npm", ["run", "build"], {
+      cwd: projectRoot,
+      stdio: "inherit",
+      env: process.env
+    });
+    child.on("exit", (code) => {
+      if (code === 0) {
+        resolve();
+      } else {
+        reject(new Error(`Build failed with exit code ${code}`));
+      }
+    });
+    child.on("error", reject);
+  });
+}
+
+async function ensureBuild() {
+  const status = await getBuildStatus();
+  if (status.ok) return status;
+
+  const reason = status.missing.length
+    ? `missing ${status.missing.join(", ")}`
+    : `source changed after build: ${status.newestSource?.path || "unknown"}`;
+  await runBuild(reason);
+  return getBuildStatus();
+}
+
+function shouldCloseServer(server) {
+  return !server?.reused;
+}
+
+async function getRenderServer(args, options = {}) {
+  const host = options.host || "127.0.0.1";
+  const port = Number(readFlag(args, "--port", options.port || 3000));
+  return startServer({
+    host,
+    port,
+    fallbackPort: false,
+    reuseExisting: true,
+    mode: options.mode || "production"
+  });
 }
 
 async function commandServe(args) {
@@ -258,13 +375,16 @@ async function commandServe(args) {
   const host = readFlag(args, "--host", "127.0.0.1");
   const mode = hasFlag(args, "--dev") ? "development" : "production";
   if (mode === "production") {
-    await ensureBuild();
+    const buildStatus = await ensureBuild();
+    if (!buildStatus.ok) {
+      throw new Error(`Production build is not ready: ${buildStatus.missing.join(", ") || "stale assets"}`);
+    }
   }
-  const server = await startServer({ host, port, fallbackPort: port === 3000 ? 3001 : port + 1, mode });
-  console.log(`Excalidraw Codex is running at ${server.url}`);
+  const server = await startServer({ host, port, fallbackPort: false, reuseExisting: true, mode });
+  console.log(`Excalidraw Codex is ${server.reused ? "already running" : "running"} at ${server.url}`);
   console.log(`Mode: ${mode}`);
-  if (server.port !== port) {
-    console.log(`Port ${port} was busy; using ${server.port} instead.`);
+  if (server.reused) {
+    console.log(`Port ${port} is already serving Excalidraw Codex; reusing it instead of opening another port.`);
   }
   console.log(`Artifacts: ${artifactsDir}`);
   try {
@@ -278,6 +398,10 @@ async function commandServe(args) {
 
   if (hasFlag(args, "--open")) {
     spawn("open", [server.url], { stdio: "ignore", detached: true }).unref();
+  }
+
+  if (server.reused) {
+    return;
   }
 
   process.on("SIGINT", async () => {
@@ -300,38 +424,16 @@ async function commandFromMermaid(args) {
   const definition = await readInput(inputPath);
 
   await ensureBuild();
-  const server = await startServer({
-    host: "127.0.0.1",
-    port: Number(readFlag(args, "--port", 3000)),
-    fallbackPort: 3001,
-    mode: "production"
-  });
-  let browser;
+  const server = await getRenderServer(args);
   try {
-    browser = await chromium.launch();
-    const page = await browser.newPage({ viewport: { width: 1024, height: 768 } });
-    await page.goto(`${server.url}mermaid.html`, { waitUntil: "networkidle" });
-    await page.waitForFunction(() => Boolean(window.__convertMermaidToExcalidraw__), null, {
-      timeout: 30000
-    });
-    const parsed = await page.evaluate(
-      async ({ source, size }) => window.__convertMermaidToExcalidraw__(source, size),
-      { source: definition, size: fontSize }
-    );
-    const scene = createScene(parsed.elements, parsed.files ?? {}, {
-      codex: {
-        generator: "from-mermaid",
-        elementsKind: "skeleton",
-        mermaidDefinition: definition
-      }
+    const scene = await convertMermaidToScene(definition, {
+      baseUrl: server.url,
+      fontSize
     });
     await writeScene(outName, scene);
     console.log(await copyArtifactScene(outName, externalOutPath));
   } finally {
-    if (browser) {
-      await browser.close();
-    }
-    await server.close();
+    if (shouldCloseServer(server)) await server.close();
   }
 }
 
@@ -410,16 +512,11 @@ async function commandFromBrief(args) {
   });
   if (hasFlag(args, "--preview")) {
     await ensureBuild();
-    const server = await startServer({
-      host: "127.0.0.1",
-      port: Number(readFlag(args, "--port", 3000)),
-      fallbackPort: 3001,
-      mode: "production"
-    });
+    const server = await getRenderServer(args);
     try {
       result.preview = await exportSceneAsset(outName, { format: "png", baseUrl: server.url });
     } finally {
-      await server.close();
+      if (shouldCloseServer(server)) await server.close();
     }
   }
   const outputPath = await copyArtifactScene(outName, externalOutPath);
@@ -628,6 +725,239 @@ async function commandConfig(args) {
   }
 }
 
+async function commandDoctor(args) {
+  if (hasHelpFlag(args)) {
+    printCommandHelp("doctor");
+    return;
+  }
+
+  const checks = [];
+  const addCheck = (name, ok, details = {}) => {
+    checks.push({ name, ok: Boolean(ok), ...details });
+  };
+
+  const config = getRuntimeConfig();
+  addCheck("config", Boolean(config.packageRoot && config.artifactsDir), {
+    packageRoot: config.packageRoot,
+    artifactsDir: config.artifactsDir,
+    defaultFontFamilyName: config.defaultFontFamilyName,
+    snapshotRetentionLimit: config.snapshotRetentionLimit
+  });
+
+  try {
+    const buildStatus = await getBuildStatus();
+    addCheck("build-assets", buildStatus.ok, buildStatus);
+  } catch (error) {
+    addCheck("build-assets", false, {
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
+
+  try {
+    const shareDryRun = await exportSceneToExcalidrawUrl({
+      type: "excalidraw",
+      version: 2,
+      source: "https://codex.local/excalidraw-codex-doctor",
+      elements: [
+        {
+          id: "doctor-box",
+          type: "rectangle",
+          x: 0,
+          y: 0,
+          width: 220,
+          height: 96,
+          strokeColor: "#1e1e1e",
+          backgroundColor: "#e7f5ff",
+          seed: 1,
+          version: 1,
+          versionNonce: 1,
+          isDeleted: false,
+          groupIds: [],
+          boundElements: []
+        },
+        {
+          id: "doctor-label",
+          type: "text",
+          x: 24,
+          y: 32,
+          width: 172,
+          height: 32,
+          text: "Share dry run",
+          originalText: "Share dry run",
+          fontSize: 20,
+          fontFamily: 2,
+          strokeColor: "#1e1e1e",
+          backgroundColor: "transparent",
+          seed: 2,
+          version: 1,
+          versionNonce: 2,
+          isDeleted: false,
+          groupIds: [],
+          boundElements: [],
+          containerId: null,
+          lineHeight: 1.25
+        }
+      ],
+      appState: { viewBackgroundColor: "#ffffff", gridSize: null },
+      files: {}
+    }, {
+      dryRun: true,
+      includeFiles: false
+    });
+    addCheck("share-payload", Boolean(shareDryRun.payloadSize && shareDryRun.payloadSha256), {
+      dryRun: true,
+      elementCount: shareDryRun.elementCount,
+      payloadSize: shareDryRun.payloadSize,
+      payloadSha256: shareDryRun.payloadSha256
+    });
+  } catch (error) {
+    addCheck("share-payload", false, {
+      dryRun: true,
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
+
+  const mcpTools = listMcpTools();
+  const requiredMcpTools = [
+    "read_me",
+    "create_view",
+    "describe_scene",
+    "create_from_mermaid",
+    "batch_create_elements",
+    "update_element",
+    "delete_element",
+    "export_scene",
+    "import_scene",
+    "export_to_image",
+    "export_to_excalidraw_url",
+    "snapshot_scene",
+    "restore_snapshot",
+    "get_live_canvas_status",
+    "get_canvas_screenshot",
+    "review_canvas",
+    "read_diagram_guide",
+    "apply_canvas_patch"
+  ];
+  const missingMcpTools = requiredMcpTools.filter(
+    (name) => !mcpTools.some((tool) => tool.name === name)
+  );
+  addCheck("mcp-tools", mcpTools.length >= 35 && missingMcpTools.length === 0, {
+    toolCount: mcpTools.length,
+    required: requiredMcpTools,
+    missing: missingMcpTools
+  });
+
+  try {
+    const libraries = await validateLibraryRegistry();
+    addCheck("libraries", libraries.ok, {
+      count: libraries.count,
+      failing: libraries.results.filter((result) => !result.ok).map((result) => result.id)
+    });
+  } catch (error) {
+    addCheck("libraries", false, {
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
+
+  const serverUrl = `http://${readFlag(args, "--host", "127.0.0.1")}:${Number(readFlag(args, "--port", 3000))}/`;
+  let health = null;
+  try {
+    const response = await fetch(`${serverUrl}api/health`);
+    health = response.ok ? await response.json() : null;
+    const missingCapabilities = missingServerCapabilities(health);
+    addCheck("server-health", Boolean(health && isCompatibleHealth(health)), {
+      url: serverUrl,
+      status: response.status,
+      serverName: health?.name,
+      version: health?.version,
+      capabilities: health?.capabilities,
+      missingCapabilities
+    });
+  } catch (error) {
+    addCheck("server-health", false, {
+      url: serverUrl,
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
+
+  try {
+    const response = await fetch(`${serverUrl}api/live-scenes`);
+    const live = response.ok ? await response.json() : null;
+    addCheck("live-canvas-api", Boolean(response.ok && live?.ok && Array.isArray(live.scenes)), {
+      status: response.status,
+      liveSceneCount: Array.isArray(live?.scenes) ? live.scenes.length : undefined
+    });
+  } catch (error) {
+    addCheck("live-canvas-api", false, {
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
+
+  const result = {
+    ok: checks.every((check) => check.ok),
+    checkedAt: new Date().toISOString(),
+    checks
+  };
+
+  if (hasFlag(args, "--json")) {
+    printJson(result);
+    return;
+  }
+
+  console.log(`Excalidraw Codex doctor: ${result.ok ? "OK" : "needs attention"}`);
+  for (const check of checks) {
+    console.log(`${check.ok ? "OK" : "FAIL"}\t${check.name}`);
+    if (!check.ok && check.error) console.log(`  ${check.error}`);
+    if (!check.ok && Array.isArray(check.missing) && check.missing.length) console.log(`  Missing: ${check.missing.join(", ")}`);
+    if (!check.ok && Array.isArray(check.missingCapabilities) && check.missingCapabilities.length) console.log(`  Missing capabilities: ${check.missingCapabilities.join(", ")}`);
+    if (!check.ok && check.stale && check.newestSource?.path) console.log(`  Stale build: ${check.newestSource.path} is newer than ${check.oldestBuild?.file || "dist"}`);
+    if (!check.ok && Array.isArray(check.failing) && check.failing.length) console.log(`  Failing: ${check.failing.join(", ")}`);
+  }
+}
+
+async function commandMcp(args) {
+  if (hasHelpFlag(args)) {
+    printCommandHelp("mcp");
+    return;
+  }
+  await startMcpServer();
+}
+
+function mcpConfigSnippet() {
+  return {
+    mcpServers: {
+      "excalidraw-codex": {
+        command: "excalidraw-codex",
+        args: ["mcp"]
+      }
+    }
+  };
+}
+
+async function commandMcpConfig(args) {
+  if (hasHelpFlag(args)) {
+    printCommandHelp("mcp-config");
+    return;
+  }
+  const snippet = mcpConfigSnippet();
+  if (hasFlag(args, "--json")) {
+    printJson({
+      ...snippet,
+      tools: listMcpTools().map((tool) => ({
+        name: tool.name,
+        description: tool.description
+      }))
+    });
+    return;
+  }
+  console.log(JSON.stringify(snippet, null, 2));
+  console.log("");
+  console.log("Tools:");
+  for (const tool of listMcpTools()) {
+    console.log(`- ${tool.name}: ${tool.description}`);
+  }
+}
+
 function resolveScenePath(input) {
   const absolute = path.resolve(process.cwd(), input);
   if (path.isAbsolute(input) || input.includes(path.sep)) {
@@ -692,12 +1022,7 @@ async function commandExport(args) {
           : path.join(artifactsDir, sceneName.replace(/\.excalidraw$/, `.${format}`)))
     );
 
-  const server = await startServer({
-    host: "127.0.0.1",
-    port: Number(readFlag(args, "--port", 3000)),
-    fallbackPort: 3001,
-    mode: "production"
-  });
+  const server = await getRenderServer(args);
 
   let browser;
   try {
@@ -732,8 +1057,42 @@ async function commandExport(args) {
     if (browser) {
       await browser.close();
     }
-    await server.close();
+    if (shouldCloseServer(server)) await server.close();
   }
+}
+
+async function commandShare(args) {
+  if (hasHelpFlag(args)) {
+    printCommandHelp("share");
+    return;
+  }
+  const input = args[0];
+  if (!input) {
+    throw new Error(COMMAND_USAGE.share);
+  }
+  const scene = await readSceneFromInput(input);
+  const result = await exportSceneToExcalidrawUrl(scene, {
+    dryRun: hasFlag(args, "--dry-run"),
+    endpoint: readFlag(args, "--endpoint"),
+    includeFiles: !hasFlag(args, "--no-files"),
+    includeDeleted: hasFlag(args, "--include-deleted"),
+    includeCustomData: hasFlag(args, "--include-custom-data")
+  });
+  const payload = {
+    ok: true,
+    scene: isPathLike(input) ? resolveScenePath(input) : normalizeSceneName(input),
+    share: result
+  };
+  if (hasFlag(args, "--json")) {
+    printJson(payload);
+    return;
+  }
+  if (result.dryRun) {
+    console.log(`Dry run OK: ${result.elementCount} elements, ${result.payloadSize} bytes encrypted payload`);
+    console.log(`SHA-256: ${result.payloadSha256}`);
+    return;
+  }
+  console.log(result.url);
 }
 
 async function commandOpen(args) {
@@ -942,15 +1301,25 @@ async function readJsonPlan(inputPath) {
 }
 
 async function commandSnapshot(args) {
+  if (hasHelpFlag(args)) {
+    printCommandHelp("snapshot");
+    return;
+  }
   const input = args[0];
   if (!input) {
     throw new Error("Missing scene path.");
   }
-  const snapshot = await createSnapshot(input, { label: readFlag(args, "--label", "") });
+  const snapshot = await createSnapshot(input, {
+    label: readFlag(args, "--label", ""),
+    keep: readFlag(args, "--keep", undefined)
+  });
   if (hasFlag(args, "--json")) {
     printJson(snapshot);
   } else {
     console.log(snapshot.path);
+    if (snapshot.prunedSnapshots?.length) {
+      console.error(`Pruned ${snapshot.prunedSnapshots.length} old snapshot(s).`);
+    }
   }
 }
 
@@ -1158,12 +1527,7 @@ async function commandGalleryRefresh(args) {
   const input = args[0];
   const format = readFlag(args, "--format", "png") === "svg" ? "svg" : "png";
   await ensureBuild();
-  const server = await startServer({
-    host: "127.0.0.1",
-    port: Number(readFlag(args, "--port", 3000)),
-    fallbackPort: 3001,
-    mode: "production"
-  });
+  const server = await getRenderServer(args);
   try {
     const sceneNames =
       !input || input === "--all" || hasFlag(args, "--all")
@@ -1181,7 +1545,7 @@ async function commandGalleryRefresh(args) {
       }
     }
   } finally {
-    await server.close();
+    if (shouldCloseServer(server)) await server.close();
   }
 }
 
@@ -1200,7 +1564,11 @@ async function main() {
   if (command === "library" || command === "libraries") return commandLibrary(args);
   if (command === "validate") return commandValidate(args);
   if (command === "config") return commandConfig(args);
+  if (command === "doctor") return commandDoctor(args);
+  if (command === "mcp") return commandMcp(args);
+  if (command === "mcp-config") return commandMcpConfig(args);
   if (command === "export") return commandExport(args);
+  if (command === "share") return commandShare(args);
   if (command === "open") return commandOpen(args);
   if (command === "snapshot") return commandSnapshot(args);
   if (command === "snapshots") return commandSnapshots(args);

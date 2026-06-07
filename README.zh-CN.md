@@ -2,27 +2,29 @@
 
 [English](README.md) | 简体中文
 
-面向 Codex 和 Claude Code 的本地 Excalidraw 工作台、CLI 和 Agent Skill。
+面向 Codex 和 Claude Code 的本地 Excalidraw 工作台、MCP 画布桥、CLI 和 Agent Skill。
 
-这个项目不是为了取代 Mermaid，而是给 Agent 一个轻量的可编辑画布能力：生成 `.excalidraw` 源文件、导出 PNG/SVG、打开本地浏览器工作台，并在用户手动修改画布后读回改动，继续协作。
+这个项目不是为了取代 Mermaid，而是给 Agent 一个能“看见并改动画布”的 Excalidraw 协作能力：读取当前 scene、批量 patch 画布、导出 PNG/SVG、打开本地浏览器工作台，并在用户手动修改画布后读回改动，继续协作。
 
 ## 你会得到什么
 
 - 一个 Vite + React + TypeScript 的 Excalidraw 本地工作台。
+- 一个轻量 MCP server，让 Codex / Claude Code 能读写当前 Excalidraw 画布。
 - 一个名为 `excalidraw-codex` 的 CLI。
 - 一个可移植的 `excalidraw-diagram` Skill，适用于 Codex 和 Claude Code。
 - 基于 `@excalidraw/mermaid-to-excalidraw` 的 Mermaid 转 Excalidraw 能力。
-- 面向架构图、产品草图、页面流、低保真原型和实施计划的自然语言模板。
-- 读回、检查、diff、patch、polish、QA、快照和导出的命令。
+- 用于读取画布上下文、批量修改、插入 library、读回用户编辑、快照和导出的画布工具。
+- 当 MCP 不可用或只需要快速草稿时，保留 Mermaid 和自然语言 brief 的 fallback 能力。
 - 可选的 Excalidraw 公共 Library 注册表，用于 wireframe、emoji 标记、决策控件、商业画布和数据可视化组件。
 
 ## 内部组织方式
 
-- `Expression Plan`：把用户 brief 转成语言、意图、视觉组织方式、阅读路径、文案密度和 library 使用意图。
-- `Diagram Recipes`：把表达计划转成可编辑 Excalidraw primitives，优先使用分组的 shape + text，而不是隐藏 label。
-- `Generation Workflow`：统一 CLI 和 HTTP 的生成行为，包括 brief 生成、library 选择、polish、预览和保存。
+- `Canvas Bridge`：新的核心 Agent Interface，负责打开场景、读取紧凑画布上下文、批量 patch、插入 library、快照、inspect 和导出。
+- `MCP Server`：把 Canvas Bridge 暴露给 Codex / Claude Code，成为 Agent 的“眼睛和手”。
+- `CLI`：负责确定性的安装、启动工作台、配置路径、library 安装 / 搜索、校验、导出和 fallback 命令。
 - `Scene Workspace`：负责本地 scene 文件、snapshot、preview 元数据和 artifacts 路径。
 - `Quality / Export`：让 QA 与浏览器渲染 PNG/SVG 导出尽量贴近真实 Excalidraw 渲染路径。
+- `Legacy Draft Recipes`：保留 Mermaid 和 brief-to-scene 草稿能力，但不再作为默认创作路径。
 
 ## 环境要求
 
@@ -33,7 +35,7 @@
 安装脚本会安装核心依赖：
 
 ```sh
-npm install react react-dom @excalidraw/excalidraw @excalidraw/mermaid-to-excalidraw
+npm install react react-dom @excalidraw/excalidraw @excalidraw/mermaid-to-excalidraw @modelcontextprotocol/sdk
 ```
 
 ## 安装
@@ -84,6 +86,12 @@ npm run setup -- --skip-playwright
 npm run setup -- --skip-link
 ```
 
+安装过程中同时运行构建和烟测：
+
+```sh
+npm run setup -- --verify
+```
+
 ## 启动工作台
 
 启动本地服务：
@@ -110,19 +118,44 @@ excalidraw-codex open my-diagram.excalidraw
 
 ```sh
 excalidraw-codex config
+excalidraw-codex doctor
 excalidraw-codex serve
-excalidraw-codex plan brief.txt --json
+excalidraw-codex mcp-config
+excalidraw-codex mcp
 excalidraw-codex from-mermaid diagram.md --scene architecture.excalidraw
-excalidraw-codex from-brief brief.txt --scene product-map.excalidraw --preview
 excalidraw-codex validate product-map.excalidraw
 excalidraw-codex qa product-map.excalidraw
 excalidraw-codex export product-map.excalidraw --format all --require-qa
+excalidraw-codex share product-map.excalidraw --dry-run
 excalidraw-codex inspect product-map.excalidraw --from latest
-excalidraw-codex snapshot product-map.excalidraw --label before-edit
+excalidraw-codex snapshot product-map.excalidraw --label before-edit --keep 80
 excalidraw-codex gallery-refresh --all
 ```
 
-`serve` 默认使用 production build，因此可以安全地从其他项目目录启动。只有在开发这个工作台本身时，才使用 `excalidraw-codex serve --dev`。
+`serve` 默认使用 production build，因此可以安全地从其他项目目录启动。启动前它会检查 `dist/`，如果工作台构建产物缺失，或比源文件旧，会自动重新构建。只有在开发这个工作台本身时，才使用 `excalidraw-codex serve --dev`。
+
+MCP 命令：
+
+```sh
+excalidraw-codex mcp-config --json
+excalidraw-codex mcp
+```
+
+`mcp-config` 用来输出可配置到 Codex / Claude Code 的 MCP 片段。`mcp` 会启动 stdio MCP server，通常由 Agent 客户端启动，不需要用户手动长期开着。
+
+MCP 工具分组：
+
+- 直接绘制协议：`read_me`、`create_view`、`describe_scene`。这一层借鉴成熟 Excalidraw MCP 的 compact element array、camera/checkpoint 和画布读回模式。
+- 格式兼容：`create_from_mermaid`、`export_scene`、`import_scene`、`export_to_image`、`export_to_excalidraw_url` 让常见 Excalidraw MCP 工作流不用离开 MCP 画布链路。
+- 画布感知：`get_live_canvas_status`、`get_canvas_context`、`review_canvas`、`get_canvas_screenshot`、`query_elements`、`get_element`。
+- 绘制 / 编辑：`batch_create_elements`、`update_element`、`delete_element`、`group_elements`、`ungroup_elements`、`align_elements`、`distribute_elements`、`apply_canvas_patch`、`clear_canvas`、`duplicate_elements`、`lock_elements`、`unlock_elements`、`set_viewport`。
+- 绘图指南：`read_diagram_guide`，覆盖 workflow、layout、visual language、text、review 和具体 Excalidraw anti-pattern。
+- Libraries：`search_libraries`、`inspect_library`、`insert_library_item`。
+- 生命周期：`open_or_create_canvas`、`snapshot_canvas`、`snapshot_scene`、`restore_snapshot`、`inspect_canvas`、`export_canvas`、`list_canvases`、`get_runtime_config`。
+
+`create_view` 会把 `cameraUpdate` 伪元素转换成工作台视口。它也支持可选的 `reveal: true` 渐进式 live 更新，适合演示和分步讲解；普通快速生成默认不要打开。
+
+`share` / `export_to_excalidraw_url` 是显式外部分享动作。它会先在本地加密 scene payload，然后只有在被明确调用时才上传到 Excalidraw JSON store。使用 `--dry-run` 可以只验证 payload 生成，不上传。
 
 路径语义：
 
@@ -143,6 +176,8 @@ excalidraw-codex library install <official-id-or-source>
 
 Library 搜索是只读操作。只有当用户明确指定要安装某个公共 Library 时，Agent 才应该执行安装。
 
+已安装到 registry 的 libraries 会在工作台启动时自动注入 Excalidraw 自带的 Library 面板。安装新 library 后，刷新或重启工作台即可在浏览器画布里使用对应组件。
+
 ## Agent 使用方式
 
 安装并重启后，可以自然地让 Codex 或 Claude Code 画图：
@@ -153,11 +188,12 @@ Library 搜索是只读操作。只有当用户明确指定要安装某个公共
 
 Skill 会指导 Agent：
 
-- 先判断表达策略；
-- 对复杂 brief 先使用 `excalidraw-codex plan`，把意图、视觉组织方式、阅读路径、语言、文案密度和 library 使用意图显式化；
+- 先读取 `excalidraw-codex config` 和 `excalidraw-codex mcp-config`；
+- 默认使用 MCP 画布桥进行绘制和读回；
+- 先打开或创建画布，读取绘图指南、检查 live canvas 状态、读取当前画布上下文，再用语义批次 patch 画布，避免盲目整张重生成；
+- 对复杂图、低保真界面或视觉质量敏感的图，使用 `review_canvas` 回看之后再判断是否完成；它会一次返回 PNG、结构上下文、QA 和 review 原则；
+- 在 LLM 层判断表达策略：意图、视觉组织方式、阅读路径、语言、文案密度、形状 / 组件语言和 library 使用；
 - 只在结构天然适合 Mermaid 时使用 Mermaid；
-- 生成可编辑的 `.excalidraw` 文件；
-- 先读取 `excalidraw-codex config`，并返回真实配置的 `artifactsDir`；
 - 把 recipes 和 libraries 当作可选视觉积木，而不是僵硬模板或强制装饰；
 - 执行 validate 和 QA，但不把每个 warning 都变成僵硬的自动排版；
 - 导出 PNG/SVG 预览；
@@ -165,6 +201,14 @@ Skill 会指导 Agent：
 - 在用户编辑后，通过 inspect 或 diff 读回画布，再继续协作。
 
 画布文字默认跟随用户当前对话语言。用户用中文交流时，图里的标题、节点、注释和 UI 文案默认使用中文；用户用英文交流时，则默认使用英文。产品名、API 名、文件名和代码标识符保留原文。
+
+Live canvas 行为：
+
+- 浏览器工作台会把当前画布同步到本地服务，作为 live draft。
+- MCP 工具会优先读取 live draft；没有 live draft 时再读取保存后的 `.excalidraw` 文件。
+- patch、export、snapshot 会先把 live draft materialize 到文件，避免用户未保存的编辑被丢掉。
+- MCP 写入场景后，浏览器工作台会轮询 live revision 并自动应用更新。
+- 手动 Save 仍然是用户可见的正式保存动作，用于画廊预览和显式持久化。
 
 ## 运行配置
 
@@ -180,8 +224,14 @@ setup 脚本会写入：
 {
   "workspaceRoot": "/path/to/Codex-Excalidraw",
   "artifactsDir": "/path/to/Codex-Excalidraw/artifacts/excalidraw",
+  "defaultFontFamily": "Nunito",
+  "snapshotRetentionLimit": 80,
   "installedFrom": "/path/to/Codex-Excalidraw",
-  "cli": "excalidraw-codex"
+  "cli": "excalidraw-codex",
+  "mcp": {
+    "command": "excalidraw-codex",
+    "args": ["mcp"]
+  }
 }
 ```
 
@@ -191,13 +241,21 @@ setup 脚本会写入：
 export EXCALIDRAW_CODEX_HOME=~/Codex-Excalidraw
 export EXCALIDRAW_CODEX_ARTIFACTS_DIR=~/Codex-Excalidraw/artifacts/excalidraw
 export EXCALIDRAW_CODEX_CONFIG_DIR=~/.codex-excalidraw
+export EXCALIDRAW_CODEX_FONT=Nunito
+export EXCALIDRAW_CODEX_SNAPSHOT_LIMIT=80
+export EXCALIDRAW_CODEX_SHARE_ENDPOINT=https://json.excalidraw.com/api/v2/post/
 ```
+
+`EXCALIDRAW_CODEX_FONT` 控制生成图里的文字字体，以及工作台空白画布的默认字体。默认是 `Nunito`，比 Virgil 更适合中英文混排。支持的名称包括 `Nunito`、`Excalifont`、`Virgil`、`Helvetica`、`Cascadia`、`Lilita One`、`Comic Shanns`、`Liberation Sans`。
+
+Snapshot 是 Agent 反复编辑时的安全网。默认每个 scene 保留最近 `80` 个 snapshot，创建新 snapshot 后会自动清理更旧的文件。设置 `EXCALIDRAW_CODEX_SNAPSHOT_LIMIT=0` 或 `"snapshotRetentionLimit": 0` 可以关闭自动清理；也可以用 `excalidraw-codex snapshot <scene> --keep <count>` 临时覆盖。
 
 ## 项目结构
 
 ```text
 bin/                         CLI 入口
-server/                      本地 API、场景读写、QA、导出和 libraries
+mcp/                         暴露画布工具的 MCP server
+server/                      Canvas Bridge、本地 API、场景读写、QA、导出和 libraries
 src/                         Vite React Excalidraw 工作台
 skills/excalidraw-diagram/   可移植的 Codex / Claude Code Skill
 libraries/                   可选 Excalidraw Library 注册表
@@ -211,8 +269,16 @@ dist/                        构建产物，已被 git 忽略
 ```sh
 npm install
 npm run build
+excalidraw-codex doctor
+npm run test:mcp
+npm run test:live
+npm run verify
 npm run dev
 ```
+
+`test:mcp` 用来验证 MCP 工具面；`test:live` 会打开真实浏览器，验证 workbench / live / MCP 的双向同步。`verify` 会运行生产构建和两个烟测。
+
+`excalidraw-codex doctor` 也会检查 production build 产物、MCP 工具面、本地分享 payload 加密 dry-run，以及当前 `3000` 端口服务的能力声明。如果构建缺失或过期，可以运行 `npm run build` 或 `excalidraw-codex serve` 重新构建。如果旧工作台进程还在运行，doctor 会列出缺失能力，提示你重启共享工作台，而不是悄悄复用不兼容服务。
 
 默认本地地址：
 
@@ -220,7 +286,7 @@ npm run dev
 http://127.0.0.1:3000/
 ```
 
-如果 3000 端口被占用，服务会切换到 3001，并打印实际 URL。
+3000 是共享工作台端口。如果它已经在运行 Excalidraw Codex，新的 session 应该直接复用，而不是继续打开 3001/3002。如果 3000 被其他进程占用且健康检查失败，再停止那个进程，或临时手动指定其他端口。
 
 ## 隐私说明
 

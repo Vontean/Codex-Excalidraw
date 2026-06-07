@@ -59,6 +59,7 @@ async function install() {
   const artifactsDir = path.resolve(
     expandHome(readFlag("--artifacts", path.join(workspaceRoot, "artifacts", "excalidraw")))
   );
+  const defaultFontFamily = readFlag("--font", process.env.EXCALIDRAW_CODEX_FONT || "Nunito");
   const agents = readFlag("--agents", "codex,claude")
     .split(",")
     .map((agent) => agent.trim().toLowerCase())
@@ -88,8 +89,13 @@ async function install() {
       {
         workspaceRoot,
         artifactsDir,
+        defaultFontFamily,
         installedFrom: repoRoot,
         cli: "excalidraw-codex",
+        mcp: {
+          command: "excalidraw-codex",
+          args: ["mcp"]
+        },
         updatedAt: new Date().toISOString()
       },
       null,
@@ -106,17 +112,26 @@ async function install() {
     installedSkills.push(await copySkill(path.resolve(process.env.CLAUDE_HOME || path.join(os.homedir(), ".claude"))));
   }
 
+  if (hasFlag("--verify")) {
+    console.log("Running smoke verification...");
+    await run("npm", ["run", "test"]);
+  }
+
   console.log("");
   console.log("Codex Excalidraw is installed.");
   console.log(`Config: ${configPath}`);
   console.log(`Artifacts: ${artifactsDir}`);
+  console.log(`Default font: ${defaultFontFamily}`);
   for (const skill of installedSkills) {
     console.log(`Skill: ${skill}`);
   }
   console.log("");
   console.log("Try:");
   console.log("  excalidraw-codex serve");
+  console.log("  excalidraw-codex doctor");
+  console.log("  excalidraw-codex mcp-config");
   console.log("  excalidraw-codex config");
+  console.log("  npm run verify");
 }
 
 install().catch((error) => {

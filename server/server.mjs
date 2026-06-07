@@ -9,12 +9,15 @@ import { runBriefGenerationWorkflow } from "./generation-workflow.mjs";
 import { createSceneFileOperations } from "./scene-file-operations.mjs";
 import {
   artifactsDir,
+  defaultFontFamily,
+  defaultFontFamilyName,
   getRuntimeConfig,
   packageRoot as projectRoot,
   snapshotsDir
 } from "./config.mjs";
 import {
   createSnapshot,
+  deleteScene,
   ensureArtifactsDir,
   listScenes,
   listSnapshots,
@@ -27,13 +30,85 @@ import {
 import {
   inspectRegisteredLibrary,
   librariesDir,
+  listInstalledLibraryItems,
   listLibraryRegistry,
   searchLibraryRegistry,
   selectLibrariesForBrief,
   validateLibraryRegistry
 } from "./library-registry.mjs";
+import {
+  clearLiveScene,
+  getLiveScene,
+  listLiveScenes,
+  updateLiveScene
+} from "./live-canvas.mjs";
+import { exportSceneToExcalidrawUrl } from "./excalidraw-share.mjs";
 
-export { artifactsDir, getRuntimeConfig, projectRoot, snapshotsDir };
+export { artifactsDir, defaultFontFamily, defaultFontFamilyName, getRuntimeConfig, projectRoot, snapshotsDir };
+
+const SERVER_NAME = "excalidraw-codex";
+const SERVER_VERSION = "0.1.0";
+const SERVER_CAPABILITIES = {
+  workbench: true,
+  canvasBridge: true,
+  mcpCanvasBridge: true,
+  mcpCompatibilityTools: true,
+  createViewProtocol: true,
+  progressiveReveal: true,
+  mcpMermaidConversion: true,
+  mcpSceneFileIo: true,
+  liveCanvas: true,
+  bidirectionalLiveBridge: true,
+  libraries: true,
+  browserExport: true,
+  excalidrawUrlExport: true,
+  snapshots: true,
+  snapshotRetention: true,
+  visualReview: true
+};
+
+const REQUIRED_SERVER_CAPABILITIES = [
+  "canvasBridge",
+  "mcpCanvasBridge",
+  "mcpCompatibilityTools",
+  "createViewProtocol",
+  "progressiveReveal",
+  "mcpMermaidConversion",
+  "mcpSceneFileIo",
+  "liveCanvas",
+  "bidirectionalLiveBridge",
+  "libraries",
+  "browserExport",
+  "excalidrawUrlExport",
+  "snapshots",
+  "snapshotRetention",
+  "visualReview"
+];
+
+function healthPayload() {
+  return {
+    ok: true,
+    name: SERVER_NAME,
+    version: SERVER_VERSION,
+    artifactsDir,
+    defaultFontFamily,
+    defaultFontFamilyName,
+    capabilities: SERVER_CAPABILITIES,
+    requiredCapabilities: REQUIRED_SERVER_CAPABILITIES
+  };
+}
+
+function isCompatibleHealth(health) {
+  return Boolean(
+    health?.ok &&
+      health.name === SERVER_NAME &&
+      missingServerCapabilities(health).length === 0
+  );
+}
+
+function missingServerCapabilities(health) {
+  return REQUIRED_SERVER_CAPABILITIES.filter((capability) => !health?.capabilities?.[capability]);
+}
 
 function activeElements(scene) {
   return Array.isArray(scene?.elements)
@@ -576,7 +651,7 @@ function defaultElement(input = {}) {
     element.text = String(input.text || "");
     element.originalText = element.text;
     element.fontSize = Number(input.fontSize || 24);
-    element.fontFamily = Number(input.fontFamily || 1);
+    element.fontFamily = Number(input.fontFamily || defaultFontFamily);
     element.textAlign = input.textAlign || "left";
     element.verticalAlign = input.verticalAlign || "top";
     element.containerId = input.containerId || null;
@@ -585,6 +660,7 @@ function defaultElement(input = {}) {
     element.label = {
       text: String(input.text || input.label || ""),
       fontSize: Number(input.fontSize || 24),
+      fontFamily: Number(input.fontFamily || defaultFontFamily),
       groupIds: []
     };
   }
@@ -626,7 +702,7 @@ function createConnector(scene, operation) {
     backgroundColor: "transparent",
     fillStyle: "hachure",
     strokeWidth: Number(operation.strokeWidth || 2),
-    strokeStyle: "solid",
+    strokeStyle: operation.strokeStyle || "solid",
     roughness: Number(operation.roughness || 1),
     opacity: 100,
     points: [
@@ -641,6 +717,14 @@ function createConnector(scene, operation) {
     end: { id: to.id },
     endArrowhead: operation.endArrowhead || "arrow",
     startArrowhead: operation.startArrowhead || null,
+    label: operation.text || operation.label
+      ? {
+          text: String(operation.text || operation.label?.text || operation.label),
+          fontSize: Number(operation.fontSize || operation.label?.fontSize || 16),
+          fontFamily: Number(operation.fontFamily || operation.label?.fontFamily || defaultFontFamily),
+          groupIds: []
+        }
+      : undefined,
     seed: Math.floor(Math.random() * 2_147_483_647),
     version: 1,
     versionNonce: Math.floor(Math.random() * 2_147_483_647),
@@ -648,7 +732,8 @@ function createConnector(scene, operation) {
     boundElements: null,
     updated: Date.now(),
     link: null,
-    locked: false
+    locked: false,
+    customData: operation.customData || undefined
   };
 }
 
@@ -1909,7 +1994,7 @@ function configureApi(app) {
   app.use(express.json({ limit: "50mb" }));
 
   app.get("/api/health", (_request, response) => {
-    response.json({ ok: true, artifactsDir });
+    response.json(healthPayload());
   });
 
   app.get("/api/scenes", async (_request, response, next) => {
@@ -1918,6 +2003,41 @@ function configureApi(app) {
     } catch (error) {
       next(error);
     }
+  });
+
+  app.get("/api/live-scenes", (_request, response) => {
+    response.json({ ok: true, scenes: listLiveScenes() });
+  });
+
+  app.get("/api/live-scenes/:name", (request, response) => {
+    const live = getLiveScene(request.params.name, {
+      includeScene: request.query.includeScene === "true"
+    });
+    if (!live) {
+      response.status(404).json({ ok: false, error: `No live scene for ${normalizeSceneName(request.params.name)}` });
+      return;
+    }
+    response.json(live);
+  });
+
+  app.post("/api/live-scenes/:name", (request, response, next) => {
+    try {
+      const scene = request.body?.scene || request.body;
+      if (!scene || scene.type !== "excalidraw" || !Array.isArray(scene.elements)) {
+        throw new Error("Live scene payload must be an Excalidraw scene.");
+      }
+      response.json(updateLiveScene(request.params.name, scene, {
+        revision: request.body?.revision,
+        clientId: request.body?.clientId,
+        source: request.body?.source || "workbench"
+      }));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.delete("/api/live-scenes/:name", (request, response) => {
+    response.json({ ok: true, scene: normalizeSceneName(request.params.name), deleted: clearLiveScene(request.params.name) });
   });
 
   app.get("/api/templates", (_request, response) => {
@@ -1970,6 +2090,14 @@ function configureApi(app) {
   app.get("/api/libraries/validate", async (_request, response, next) => {
     try {
       response.json(await validateLibraryRegistry());
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/api/libraries/items", async (_request, response, next) => {
+    try {
+      response.json({ ok: true, ...(await listInstalledLibraryItems()) });
     } catch (error) {
       next(error);
     }
@@ -2032,6 +2160,14 @@ function configureApi(app) {
     try {
       const fileName = await writeScene(request.params.name, request.body);
       response.json({ ok: true, name: fileName });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.delete("/api/scenes/:name", async (request, response, next) => {
+    try {
+      response.json({ ok: true, ...(await deleteScene(request.params.name)) });
     } catch (error) {
       next(error);
     }
@@ -2166,6 +2302,24 @@ function configureApi(app) {
     }
   });
 
+  app.post("/api/scenes/:name/share", async (request, response, next) => {
+    try {
+      response.json({
+        ok: true,
+        scene: normalizeSceneName(request.params.name),
+        share: await exportSceneToExcalidrawUrl(await readScene(request.params.name), {
+          dryRun: Boolean(request.query.dryRun || request.body?.dryRun),
+          endpoint: request.body?.endpoint,
+          includeFiles: request.body?.includeFiles !== false,
+          includeDeleted: Boolean(request.body?.includeDeleted),
+          includeCustomData: Boolean(request.body?.includeCustomData)
+        })
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.use((error, _request, response, _next) => {
     const status = error?.code === "ENOENT" ? 404 : 500;
     response.status(status).json({
@@ -2191,10 +2345,31 @@ function listen(server, host, port) {
   });
 }
 
+async function checkExistingServer(host, port) {
+  const url = `http://${host}:${port}/`;
+  try {
+    const response = await fetch(`${url}api/health`);
+    if (!response.ok) return null;
+    const health = await response.json();
+    if (!isCompatibleHealth(health)) return null;
+    return {
+      host,
+      port,
+      url,
+      reused: true,
+      health,
+      close: async () => undefined
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function startServer(options = {}) {
   const host = options.host || "127.0.0.1";
   const preferredPort = Number(options.port || 3000);
-  const fallbackPort = Number(options.fallbackPort || 3001);
+  const fallbackPort = options.fallbackPort === false ? null : Number(options.fallbackPort || 3001);
+  const reuseExisting = Boolean(options.reuseExisting);
   const mode = options.mode || process.env.NODE_ENV || "development";
   const app = express();
 
@@ -2224,7 +2399,16 @@ export async function startServer(options = {}) {
   try {
     await listen(server, host, selectedPort);
   } catch (error) {
-    if (error?.code !== "EADDRINUSE" || preferredPort === fallbackPort) {
+    if (error?.code === "EADDRINUSE" && reuseExisting) {
+      const existing = await checkExistingServer(host, preferredPort);
+      if (existing) return existing;
+      if (fallbackPort === null) {
+        throw new Error(
+          `Port ${preferredPort} is occupied, but it is not a compatible ${SERVER_NAME} server with live canvas capabilities. Stop the old process or choose an explicit temporary port.`
+        );
+      }
+    }
+    if (error?.code !== "EADDRINUSE" || fallbackPort === null || preferredPort === fallbackPort) {
       throw error;
     }
     selectedPort = fallbackPort;
@@ -2242,10 +2426,15 @@ export async function startServer(options = {}) {
 
 export {
   createSnapshot,
+  deleteScene,
   diffSceneFromSnapshot,
   diffScenes,
+  exportSceneToExcalidrawUrl,
   exportSceneAsset,
   generateSceneFromBrief,
+  healthPayload,
+  isCompatibleHealth,
+  missingServerCapabilities,
   inspectSceneFile,
   listScenes,
   listBriefTemplates,
