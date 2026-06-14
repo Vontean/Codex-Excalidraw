@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { chromium } from "playwright";
+import { launchRenderBrowser } from "../server/browser-runtime.mjs";
 import { deleteScene, writeScene } from "../server/scene-workspace.mjs";
 import { startServer } from "../server/server.mjs";
 
@@ -168,7 +168,7 @@ async function main() {
     files: {}
   });
 
-  const browser = await chromium.launch();
+  const browser = await launchRenderBrowser();
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   const client = new Client({ name: "codex-excalidraw-smoke-live", version: "0.0.0" });
   const transport = new StdioClientTransport({

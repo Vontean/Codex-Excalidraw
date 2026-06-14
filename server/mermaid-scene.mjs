@@ -1,4 +1,4 @@
-import { chromium } from "playwright";
+import { launchRenderBrowser } from "./browser-runtime.mjs";
 import { defaultCanvasBackgroundColor, defaultFontFamily } from "./config.mjs";
 
 const SCENE_SOURCE = "https://codex.local/excalidraw-codex";
@@ -45,7 +45,7 @@ export async function convertMermaidToScene(definition, options = {}) {
   const fontSize = Number(options.fontSize || 24);
   let browser;
   try {
-    browser = await chromium.launch();
+    browser = await launchRenderBrowser();
     const page = await browser.newPage({ viewport: { width: 1024, height: 768 } });
     await page.goto(`${baseUrl.replace(/\/$/, "")}/mermaid.html`, { waitUntil: "networkidle" });
     await page.waitForFunction(() => Boolean(window.__convertMermaidToExcalidraw__), null, {

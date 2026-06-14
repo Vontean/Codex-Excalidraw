@@ -58,6 +58,17 @@ export const defaultCanvasBackgroundColor =
   config.defaultCanvasBackgroundColor ||
   "#f8f9fa";
 
+export const browserExecutablePath = expandPath(
+  process.env.EXCALIDRAW_CODEX_BROWSER_EXECUTABLE ||
+    config.browserExecutablePath ||
+    ""
+);
+
+export const browserChannel =
+  process.env.EXCALIDRAW_CODEX_BROWSER_CHANNEL ||
+  config.browserChannel ||
+  "";
+
 function normalizeNonNegativeInteger(value, fallback) {
   const number = Number(value ?? fallback);
   if (!Number.isFinite(number) || number < 0) return fallback;
@@ -91,6 +102,8 @@ export function getRuntimeConfig() {
     defaultFontFamily,
     defaultFontFamilyName,
     defaultCanvasBackgroundColor,
+    browserExecutablePath: browserExecutablePath || undefined,
+    browserChannel: browserChannel || undefined,
     configDir,
     configPath,
     hasConfigFile: Object.keys(config).length > 0

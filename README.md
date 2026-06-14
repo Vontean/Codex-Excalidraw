@@ -2,235 +2,253 @@
 
 English | [简体中文](README.zh-CN.md)
 
-AI agents draw with you on a local Excalidraw canvas. Keep the workbench open in your browser, let Codex or Claude Code create and revise the diagram, edit by hand when you want, and export editable `.excalidraw`, PNG, or SVG files at the end.
+Let Codex / Claude Code help you draw, edit, and keep collaborating on your local Excalidraw canvas.
 
-Codex Excalidraw is local by default. Your scenes, snapshots, and exports stay on your machine. External Excalidraw share links are created only when you run a share command.
+It is useful for creating:
 
-This repository packages four pieces:
+* System architecture diagrams
+* Product flow diagrams
+* Page maps
+* Low-fidelity UI sketches
+* Decision trees
+* Swimlane diagrams
+* Whiteboard discussion maps
+* Concept relationship maps
+* Editable Excalidraw diagrams converted from Mermaid
 
-- a browser workbench at `http://127.0.0.1:3000/`;
-- the `excalidraw-codex` CLI for setup, serving, export, snapshots, QA, and libraries;
-- an MCP server so agents can read and update the current canvas;
-- an optional `excalidraw-diagram` skill for Codex and Claude Code.
+Unlike ordinary image generation, this project creates an Excalidraw canvas that you can keep editing.
+You can let AI draw a first version, adjust it by hand in the browser, and then ask AI to read the canvas and improve it.
 
-## When to use it
+---
 
-Use this when a diagram needs to stay editable, or when you want to collaborate with an agent while watching the canvas change.
+What problem does it solve?
 
-Good fits:
+Many times, we do not just want a picture. We want a canvas that can keep changing, keep supporting discussion, and keep being worked on.
 
-- architecture maps and system explanations;
-- product flows, page maps, and low-fidelity UI sketches;
-- process diagrams and decision trees;
-- whiteboard-style planning, evidence boards, and concept maps;
-- Mermaid-style diagrams that should become editable Excalidraw scenes.
+Codex Excalidraw mainly solves these problems:
 
-If you only need a static Mermaid diagram in Markdown, Mermaid is usually enough. This project is for the moments where the canvas matters.
+* AI can draw directly on an Excalidraw canvas.
+* You can see the generated process and result in the browser.
+* The output is not a static image. It is made of editable elements.
+* After you edit the canvas by hand, AI can still read and understand the current canvas.
+* It helps turn technical plans, product flows, and interaction structures into diagrams quickly.
 
-## Quick start
+---
 
+Quick start
+
+You can copy this prompt directly to Codex or Claude Code:
+
+Please help me install and run this project:
+https://github.com/Vontean/Codex-Excalidraw
 Requirements:
+1. Clone the project locally.
+2. Follow the README to finish installation.
+3. Start the local Excalidraw workbench.
+4. Open http://127.0.0.1:3000/.
+5. Verify that Codex / Claude Code can create, read, and edit shapes on the canvas.
 
-- Node.js 20 or newer. Node 22 LTS is recommended.
-- npm.
-- A terminal on macOS, Linux, or Windows.
+After installation, restart Codex or Claude Code so the new drawing capability takes effect.
 
-Install:
+---
 
-```sh
+Manual installation
+
+If you want to install it yourself in a terminal, use:
+
 git clone https://github.com/Vontean/Codex-Excalidraw.git
 cd Codex-Excalidraw
 npm run setup
-```
 
-The setup script installs dependencies, installs Playwright Chromium for export rendering, builds the workbench, links the `excalidraw-codex` CLI, writes local config to `~/.codex-excalidraw/config.json`, and installs the `excalidraw-diagram` skill when Codex or Claude Code skill folders are available.
+`setup` first checks whether your machine already has a browser that can be used for export, such as a Playwright browser cache or system Chrome / Chromium. If none is found, it asks whether to download Playwright Chromium. You can choose not to download it and later install a browser yourself, or set `EXCALIDRAW_CODEX_BROWSER_EXECUTABLE` to a browser path.
 
-Restart Codex or Claude Code after setup so the new skill and MCP configuration are loaded.
+Then start the local workbench:
 
-Start the workbench:
-
-```sh
 excalidraw-codex serve
-```
 
-Open:
+Open in your browser:
 
-```text
 http://127.0.0.1:3000/
-```
 
-Then ask your agent for a diagram:
+---
 
-```text
-Use Excalidraw to draw an editable system architecture map for this project.
-```
+How to use
 
-Generated scenes are stored in the configured artifacts directory. By default:
+After opening the workbench, you can say this to Codex or Claude Code:
 
-```text
+Use Excalidraw to draw an editable system architecture diagram.
+
+Or:
+
+Based on the current project, draw a product flow diagram from user registration to checkout completion.
+
+You can also ask it to keep editing:
+
+Turn this flowchart into a swimlane diagram, split by user, frontend, backend, and database.
+
+---
+
+Typical use cases
+
+1. Technical architecture diagrams
+
+Good for:
+
+* Frontend and backend architecture
+* API call relationships
+* Data flow
+* Module dependencies
+* Deployment structure
+
+Example:
+
+Draw a system architecture diagram for a web app, including frontend, backend, database, cache, object storage, and third-party login service.
+
+2. Product flow diagrams
+
+Good for:
+
+* User journeys
+* Page transitions
+* Operation flows
+* Error branches
+* Onboarding flows
+
+Example:
+
+Draw an onboarding flow for a new user's first time using an app, including registration, permission authorization, preference setup, and home page guidance.
+
+3. Low-fidelity UI sketches
+
+Good for:
+
+* Web page structure
+* App page frames
+* Dashboard layouts
+* Form pages
+* Settings pages
+
+Example:
+
+Draw a low-fidelity mobile home page sketch with a top status card, quick actions, notification list, and bottom navigation.
+
+4. Whiteboard discussions
+
+Good for:
+
+* Concept maps
+* Evidence boards
+* Problem breakdowns
+* Solution comparisons
+* Pyramid structures
+
+Example:
+
+Use the pyramid principle to draw a product redesign presentation structure. Put the core conclusion at the top, then split the lower level into user problems, design solution, and data validation.
+
+Example outputs
+
+These PNGs were exported from local Excalidraw canvases and can be used as references for the generated result.
+
+codex-excalidraw-5w1h-requirements
+
+![codex-excalidraw-5w1h-requirements](docs/images/codex-excalidraw-5w1h-requirements.png)
+
+test-4-task-status-transition
+
+![test-4-task-status-transition](docs/images/test-4-task-status-transition.png)
+
+ai-assistant-app-ia
+
+![ai-assistant-app-ia](docs/images/ai-assistant-app-ia.png)
+
+---
+
+Where are generated files?
+
+By default, generated canvases and exported files are saved in:
+
 artifacts/excalidraw/
-```
 
-## How the workflow works
+You can find Excalidraw files, screenshots, and export results there.
 
-1. Open or reuse the local browser workbench.
-2. Ask Codex or Claude Code to draw with Excalidraw.
-3. The agent creates a scene, reads the current canvas, and makes meaningful updates instead of replacing the file blindly.
-4. You can edit the canvas in the browser. The agent can read those edits and continue from them.
-5. Export the final result as `.excalidraw`, PNG, SVG, or all of them.
+---
 
-The important part is read-back. The agent is not just generating a file once; it can inspect the current canvas and keep working from the latest version.
+Requirements
 
-## Common commands
+You need:
 
-```sh
-excalidraw-codex config
-excalidraw-codex doctor
-excalidraw-codex serve
-excalidraw-codex open product-map.excalidraw
-excalidraw-codex validate product-map.excalidraw
-excalidraw-codex qa product-map.excalidraw
-excalidraw-codex export product-map.excalidraw --format all
-excalidraw-codex snapshot product-map.excalidraw --label before-edit
-excalidraw-codex restore product-map.excalidraw --from latest
-```
+* Node.js 20 or newer
+* npm
+* A terminal on macOS, Linux, or Windows
 
-Convert Mermaid when the source is already Mermaid-shaped:
+Node.js 22 LTS is recommended.
 
-```sh
-excalidraw-codex from-mermaid diagram.md --scene architecture.excalidraw
-```
+---
 
-Create a rough first pass from a text brief:
+What is included in this project?
 
-```sh
-excalidraw-codex from-brief brief.txt --scene product-flow.excalidraw
-```
+You do not need to understand this before using it.
+If you want a simple mental model, it includes:
 
-Create an external Excalidraw share link only when you mean to:
+* A local Excalidraw workbench
+* The `excalidraw-codex` command-line tool
+* An MCP service that lets AI read and edit the canvas
+* A drawing workflow for Codex / Claude Code
 
-```sh
-excalidraw-codex share product-map.excalidraw --dry-run
-```
+---
 
-Without `--dry-run`, `share` uploads an encrypted payload to Excalidraw's JSON store. Normal editing, MCP work, export, snapshots, and local files stay on your machine.
+Libraries
 
-## Agent and MCP setup
+The project can load Excalidraw libraries.
+You can add common wireframe components, flowchart components, business canvas components, and data visualization components to the canvas library.
 
-For most users, `npm run setup` is enough. It installs the skill and writes the MCP config snippet when the expected folders exist.
+List local libraries:
 
-If you need to configure an agent manually, print the snippet:
-
-```sh
-excalidraw-codex mcp-config --json
-```
-
-The MCP server command is:
-
-```sh
-excalidraw-codex mcp
-```
-
-The MCP tools are intentionally workflow-level. They cover opening a canvas, reading context, creating or patching a view, reviewing the result, taking snapshots, restoring snapshots, exporting, and creating a scene from Mermaid.
-
-## Setup options
-
-Install only for Codex:
-
-```sh
-npm run setup -- --agents codex
-```
-
-Install only for Claude Code:
-
-```sh
-npm run setup -- --agents claude
-```
-
-Choose where scenes and exports are stored:
-
-```sh
-npm run setup -- --workspace ~/Codex-Excalidraw --artifacts ~/Codex-Excalidraw/artifacts/excalidraw
-```
-
-Skip optional steps:
-
-```sh
-npm run setup -- --skip-playwright
-npm run setup -- --skip-link
-```
-
-Run smoke verification during setup:
-
-```sh
-npm run setup -- --verify
-```
-
-## Libraries
-
-The bundled library registry includes optional Excalidraw building blocks for wireframes, decision controls, business canvases, and data visualization.
-
-Search local libraries:
-
-```sh
 excalidraw-codex library list
+
+Search a library:
+
 excalidraw-codex library search "wireframe"
-excalidraw-codex library select "mobile onboarding flow"
-```
 
-Install a public library only after choosing one:
+After installation, the assets appear in Excalidraw's Library panel.
 
-```sh
-excalidraw-codex library remote-search "kanban"
-excalidraw-codex library install <official-id-or-source>
-```
+---
 
-Installed libraries load into the Excalidraw Library panel when the workbench starts.
+FAQ
 
-## Configuration
+Is this an image generation tool?
 
-Setup writes local config to:
+No.
 
-```text
-~/.codex-excalidraw/config.json
-```
+It generates Excalidraw canvas content. The elements can still be edited, moved, copied, and changed.
 
-Common environment overrides:
+Can I manually edit diagrams drawn by AI?
 
-```sh
-export EXCALIDRAW_CODEX_HOME=~/Codex-Excalidraw
-export EXCALIDRAW_CODEX_ARTIFACTS_DIR=~/Codex-Excalidraw/artifacts/excalidraw
-export EXCALIDRAW_CODEX_CONFIG_DIR=~/.codex-excalidraw
-export EXCALIDRAW_CODEX_FONT=Nunito
-export EXCALIDRAW_CODEX_CANVAS_BACKGROUND="#f8f9fa"
-export EXCALIDRAW_CODEX_SNAPSHOT_LIMIT=80
-```
+Yes.
 
-## Development
+You can edit the canvas directly in the browser. After that, AI can read the current canvas and continue improving it based on your edits.
 
-```sh
-npm install
-npm run build
-npm run test:mcp
-npm run test:live
-npm run verify
-npm run dev
-```
+How is it different from Mermaid?
 
-`npm run verify` runs the production build plus MCP and live-browser smoke tests.
+Mermaid is better for quickly generating structured diagrams from text.
+Excalidraw is better for freeform canvases, low-fidelity sketches, whiteboard discussions, and visual explanation.
 
-## Repository hygiene
+You can also start with Mermaid, generate a basic structure, then convert it into an Excalidraw canvas for further editing.
 
-This repository should publish the tool, not local working state.
+Who is this for?
 
-Keep these out of commits:
+It is useful for people who often need to turn ideas into diagrams, such as:
 
-- generated scenes and exports under `artifacts/excalidraw/`;
-- `dist/` and `node_modules/`;
-- local `.env` files;
-- local agent instructions such as `AGENTS.md` or `CLAUDE.md`;
-- private notes, drafts, planning documents, or discussion transcripts.
+* Product managers
+* Designers
+* Indie developers
+* Engineers
+* Technical writers
+* People using Codex / Claude Code for project development
 
-## License
+---
+
+License
 
 MIT

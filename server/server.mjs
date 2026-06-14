@@ -53,6 +53,7 @@ import {
   getActiveCanvas,
   setActiveCanvas
 } from "./active-canvas.mjs";
+import { launchRenderBrowser } from "./browser-runtime.mjs";
 
 export { artifactsDir, defaultFontFamily, defaultFontFamilyName, getRuntimeConfig, projectRoot, snapshotsDir };
 
@@ -1923,10 +1924,9 @@ async function exportSceneAsset(name, options = {}) {
   const fileName = normalizeSceneName(name);
   const format = options.format === "svg" ? "svg" : "png";
   const baseUrl = options.baseUrl || "http://127.0.0.1:3000/";
-  const { chromium } = await import("playwright");
   let browser;
   try {
-    browser = await chromium.launch();
+    browser = await launchRenderBrowser();
     const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
     await page.goto(
       `${baseUrl.replace(/\/$/, "")}/export.html?scene=${encodeURIComponent(fileName)}&format=${format}`,

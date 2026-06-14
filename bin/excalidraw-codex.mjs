@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-import { chromium } from "playwright";
 import { spawn } from "node:child_process";
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { getBrowserRuntimeStatus, launchRenderBrowser } from "../server/browser-runtime.mjs";
 import {
   artifactsDir,
   createSnapshot,
@@ -745,6 +745,15 @@ async function commandDoctor(args) {
   });
 
   try {
+    const browserRuntime = await getBrowserRuntimeStatus();
+    addCheck("browser-runtime", browserRuntime.available, browserRuntime);
+  } catch (error) {
+    addCheck("browser-runtime", false, {
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
+
+  try {
     const buildStatus = await getBuildStatus();
     addCheck("build-assets", buildStatus.ok, buildStatus);
   } catch (error) {
@@ -1019,7 +1028,7 @@ async function commandExport(args) {
 
   let browser;
   try {
-    browser = await chromium.launch();
+    browser = await launchRenderBrowser();
     const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
     for (const format of formats) {
       const outPath = outputPathFor(format);

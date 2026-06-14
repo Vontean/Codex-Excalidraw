@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import readline from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -45,6 +46,76 @@ function run(command, args, options = {}) {
   });
 }
 
+async function askYesNo(question, defaultValue = false) {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    return defaultValue;
+  }
+  const suffix = defaultValue ? "[Y/n]" : "[y/N]";
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout
+  });
+  try {
+    const answer = (await rl.question(`${question} ${suffix} `)).trim().toLowerCase();
+    if (!answer) return defaultValue;
+    return answer === "y" || answer === "yes";
+  } finally {
+    rl.close();
+  }
+}
+
+async function detectBrowserRuntime() {
+  try {
+    const { getBrowserRuntimeStatus } = await import("../server/browser-runtime.mjs");
+    return getBrowserRuntimeStatus();
+  } catch (error) {
+    return {
+      available: false,
+      source: "detection-error",
+      label: "browser runtime detection failed",
+      error: error instanceof Error ? error.message : String(error)
+    };
+  }
+}
+
+async function maybeInstallPlaywrightChromium() {
+  if (hasFlag("--skip-playwright")) {
+    console.log("Skipping Playwright Chromium check (--skip-playwright).");
+    return { installed: false, skipped: true };
+  }
+
+  if (hasFlag("--install-playwright")) {
+    console.log("Installing Playwright Chromium (--install-playwright)...");
+    await run("npx", ["playwright", "install", "chromium"]);
+    return { installed: true, forced: true };
+  }
+
+  const browserRuntime = await detectBrowserRuntime();
+  if (browserRuntime.available) {
+    console.log(`Browser runtime found: ${browserRuntime.label}`);
+    return { installed: false, available: true, browserRuntime };
+  }
+
+  console.log("No existing browser runtime was found for Excalidraw rendering.");
+  if (browserRuntime.error) {
+    console.log(`Detection detail: ${browserRuntime.error}`);
+  }
+  console.log("You can use an existing Chrome/Chromium by setting EXCALIDRAW_CODEX_BROWSER_EXECUTABLE.");
+  const shouldInstall = await askYesNo("Install Playwright Chromium now?", false);
+  if (!shouldInstall) {
+    console.log("Skipping Playwright Chromium install.");
+    console.log("Export and Mermaid conversion will need a browser later.");
+    console.log("Later options:");
+    console.log("  npx playwright install chromium");
+    console.log("  EXCALIDRAW_CODEX_BROWSER_EXECUTABLE=/path/to/chrome excalidraw-codex export <scene.excalidraw>");
+    return { installed: false, available: false };
+  }
+
+  console.log("Installing Playwright Chromium...");
+  await run("npx", ["playwright", "install", "chromium"]);
+  return { installed: true };
+}
+
 async function copySkill(targetRoot) {
   const source = path.join(repoRoot, "skills", skillName);
   const target = path.join(targetRoot, "skills", skillName);
@@ -68,10 +139,7 @@ async function install() {
   console.log("Installing npm dependencies...");
   await run("npm", ["install"]);
 
-  if (!hasFlag("--skip-playwright")) {
-    console.log("Installing Playwright Chromium...");
-    await run("npx", ["playwright", "install", "chromium"]);
-  }
+  await maybeInstallPlaywrightChromium();
 
   console.log("Building the workbench...");
   await run("npm", ["run", "build"]);

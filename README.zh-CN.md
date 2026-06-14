@@ -2,235 +2,253 @@
 
 [English](README.md) | 简体中文
 
-让 Codex / Claude Code 在你本地浏览器里的 Excalidraw 画布上和你一起画图。你可以边看边改，也可以让 Agent 读回你手动改过的画布继续画。最后拿到的是可编辑的 `.excalidraw` 源文件，以及 PNG / SVG 导出图。
+让 Codex / Claude Code 在你的本地 Excalidraw 画布上帮你画图、改图、继续协作。
 
-它默认是 local-first：画布文件、快照和导出文件都留在你的机器上。只有你明确运行分享命令时，才会生成外部 Excalidraw 分享链接。
+它适合用来生成：
 
-这个仓库包含四个部分：
+* 系统架构图
+* 产品流程图
+* 页面地图
+* 低保真界面草图
+* 决策树
+* 泳道图
+* 白板讨论图
+* 概念关系图
+* 从 Mermaid 转成可编辑的 Excalidraw 图
 
-- 浏览器工作台：`http://127.0.0.1:3000/`；
-- `excalidraw-codex` CLI：负责安装、启动、导出、快照、QA 和 library 管理；
-- MCP server：让 Agent 能读取和修改当前画布；
-- 可选的 `excalidraw-diagram` Skill：给 Codex 和 Claude Code 一套画图工作流。
+和普通图片生成不同，这个项目生成的是 可以继续编辑的 Excalidraw 画布。
+你可以让 AI 先画一版，再在浏览器里手动修改，之后继续让 AI 读取画布并帮你优化。
 
-## 适合什么场景
+⸻
 
-当图需要持续修改，或者你希望边看边让 Agent 调整画布时，用它会比一次性生成图片舒服很多。
+它解决什么问题？
 
-常见场景：
+很多时候，我们不只是想要一张图，而是想要一个可以继续改、继续讨论、继续协作的画布。
 
-- 系统架构图、模块关系图、技术解释图；
-- 产品流程、页面地图、低保真界面草图；
-- 流程图、决策树、操作路径；
-- 白板式讨论、证据板、概念地图；
-- 想从 Mermaid 起步，但最终需要 Excalidraw 可编辑画布。
+Codex Excalidraw 主要解决这些问题：
 
-如果你只需要一段放进 Markdown 的静态 Mermaid，直接用 Mermaid 就好。这个项目主要解决“画布需要被看见、被编辑、被继续协作”的问题。
+* AI 能直接在 Excalidraw 画布上绘图；
+* 你可以在浏览器里看到生成过程和结果；
+* 画出来的内容不是静态图片，而是可编辑元素；
+* 你手动修改后，AI 还能继续读取并理解当前画布；
+* 适合把技术方案、产品流程、交互结构快速变成图。
 
-## 快速开始
+⸻
 
-环境要求：
+快速开始
 
-- Node.js 20 或更新版本，推荐 Node 22 LTS。
-- npm。
-- macOS、Linux 或 Windows 终端环境。
+你可以直接把下面这段话复制给 Codex 或 Claude Code：
 
-安装：
+请帮我安装并运行这个项目：
+https://github.com/Vontean/Codex-Excalidraw
+要求：
+1. 克隆项目到本地；
+2. 按 README 完成安装；
+3. 启动本地 Excalidraw 工作台；
+4. 打开 http://127.0.0.1:3000/；
+5. 帮我验证 Codex / Claude Code 是否可以在画布上创建、读取和修改图形。
 
-```sh
+安装完成后，重启 Codex 或 Claude Code，让新的绘图能力生效。
+
+⸻
+
+手动安装
+
+如果你想自己在终端里安装，可以使用：
+
 git clone https://github.com/Vontean/Codex-Excalidraw.git
 cd Codex-Excalidraw
 npm run setup
-```
 
-setup 会安装依赖、安装用于导出的 Playwright Chromium、构建工作台、链接 `excalidraw-codex` CLI、写入 `~/.codex-excalidraw/config.json`，并在检测到 Codex 或 Claude Code 的 skill 目录时安装 `excalidraw-diagram`。
+setup 会先检测本机是否已经有可用于导出的浏览器，例如 Playwright browser cache 或系统 Chrome / Chromium。如果没有检测到，它会询问是否下载 Playwright Chromium；你也可以选择不下载，之后自己安装或通过 EXCALIDRAW_CODEX_BROWSER_EXECUTABLE 指定浏览器路径。
 
-安装完成后，重启 Codex 或 Claude Code，让新的 Skill 和 MCP 配置生效。
+然后启动本地工作台：
 
-启动工作台：
-
-```sh
 excalidraw-codex serve
-```
 
-打开：
+打开浏览器访问：
 
-```text
 http://127.0.0.1:3000/
-```
 
-然后直接让 Agent 画图：
+⸻
 
-```text
+使用方式
+
+打开工作台后，你可以直接对 Codex 或 Claude Code 说：
+
 用 Excalidraw 画一个可编辑的系统架构图。
-```
 
-生成的画布默认保存在：
+或者：
 
-```text
+根据当前项目，画一个用户从注册到完成下单的产品流程图。
+
+也可以让它继续修改：
+
+把这个流程图改成泳道图，按用户、前端、后端、数据库四个角色拆分。
+
+⸻
+
+典型使用场景
+
+1. 技术架构图
+
+适合画：
+
+* 前后端架构
+* API 调用关系
+* 数据流
+* 模块依赖
+* 部署结构
+
+示例：
+
+画一个 Web App 的系统架构图，包含前端、后端、数据库、缓存、对象存储和第三方登录服务。
+
+2. 产品流程图
+
+适合画：
+
+* 用户路径
+* 页面跳转
+* 操作流程
+* 异常分支
+* Onboarding 流程
+
+示例：
+
+画一个新用户首次使用 App 的 Onboarding 流程图，包含注册、权限授权、偏好设置和首页引导。
+
+3. 低保真界面草图
+
+适合画：
+
+* Web 页面结构
+* App 页面框架
+* Dashboard 布局
+* 表单页面
+* 设置页
+
+示例：
+
+画一个低保真的移动端首页草图，包含顶部状态卡片、快捷入口、通知列表和底部导航。
+
+4. 白板式讨论
+
+适合画：
+
+* 概念地图
+* 证据板
+* 问题拆解
+* 方案对比
+* 金字塔结构
+
+示例：
+
+用金字塔原理画一个产品改版汇报结构，顶部是核心结论，下面分成用户问题、设计方案、数据验证三部分。
+
+效果示例
+
+下面这些 PNG 来自本地 Excalidraw 画布导出，可以作为生成效果参考。
+
+codex-excalidraw-5w1h-requirements
+
+![codex-excalidraw-5w1h-requirements](docs/images/codex-excalidraw-5w1h-requirements.png)
+
+test-4-task-status-transition
+
+![test-4-task-status-transition](docs/images/test-4-task-status-transition.png)
+
+ai-assistant-app-ia
+
+![ai-assistant-app-ia](docs/images/ai-assistant-app-ia.png)
+
+⸻
+
+生成的文件在哪里？
+
+默认生成的画布和导出文件会保存在：
+
 artifacts/excalidraw/
-```
 
-## 工作流是什么样的
+你可以在这里找到 Excalidraw 文件、截图和导出结果。
 
-1. 打开或复用本地浏览器工作台。
-2. 让 Codex 或 Claude Code 使用 Excalidraw 画图。
-3. Agent 创建画布、读取当前内容，然后按有意义的阶段修改，而不是盲目重写整个文件。
-4. 你可以在浏览器里手动改。Agent 能读回这些改动，再继续往下画。
-5. 收尾时导出 `.excalidraw`、PNG、SVG，或一次导出全部。
+⸻
 
-这里最重要的是“读回”。Agent 不是只生成一次文件就结束，而是能看见当前画布，并从最新版本继续。
+环境要求
 
-## 常用命令
+需要提前安装：
 
-```sh
-excalidraw-codex config
-excalidraw-codex doctor
-excalidraw-codex serve
-excalidraw-codex open product-map.excalidraw
-excalidraw-codex validate product-map.excalidraw
-excalidraw-codex qa product-map.excalidraw
-excalidraw-codex export product-map.excalidraw --format all
-excalidraw-codex snapshot product-map.excalidraw --label before-edit
-excalidraw-codex restore product-map.excalidraw --from latest
-```
+* Node.js 20 或更新版本
+* npm
+* macOS、Linux 或 Windows 终端环境
 
-当来源本来就适合 Mermaid 时，可以转换成 Excalidraw：
+推荐使用 Node.js 22 LTS。
 
-```sh
-excalidraw-codex from-mermaid diagram.md --scene architecture.excalidraw
-```
+⸻
 
-从文字 brief 生成一个草稿：
+这个项目包含什么？
 
-```sh
-excalidraw-codex from-brief brief.txt --scene product-flow.excalidraw
-```
+你不需要先理解这些也能使用。
+如果你想知道它的内部结构，可以简单理解为：
 
-只有在你确实需要外部分享链接时才运行：
+* 一个本地 Excalidraw 工作台；
+* 一个 excalidraw-codex 命令行工具；
+* 一个给 AI 读取和修改画布的 MCP 服务；
+* 一套给 Codex / Claude Code 使用的绘图工作流。
 
-```sh
-excalidraw-codex share product-map.excalidraw --dry-run
-```
+⸻
 
-不带 `--dry-run` 时，`share` 会把加密后的 payload 上传到 Excalidraw 的 JSON store。普通编辑、MCP 绘图、导出、快照和本地文件都留在本机。
+Libraries
 
-## Agent 和 MCP 配置
+项目支持加载 Excalidraw libraries。
+你可以把常用的线框图组件、流程图组件、商业画布组件、数据可视化组件加入画布素材库。
 
-大多数情况下，`npm run setup` 已经够用。它会在可用时安装 Skill，并写好 MCP 配置片段。
+查看本地 libraries：
 
-如果需要手动配置 Agent，可以输出配置片段：
-
-```sh
-excalidraw-codex mcp-config --json
-```
-
-MCP server 命令是：
-
-```sh
-excalidraw-codex mcp
-```
-
-MCP 工具刻意保持在工作流层级：打开画布、读取上下文、创建或修改视图、回看结果、创建快照、恢复快照、导出，以及从 Mermaid 创建画布。
-
-## 安装选项
-
-只安装到 Codex：
-
-```sh
-npm run setup -- --agents codex
-```
-
-只安装到 Claude Code：
-
-```sh
-npm run setup -- --agents claude
-```
-
-指定场景和导出文件的保存位置：
-
-```sh
-npm run setup -- --workspace ~/Codex-Excalidraw --artifacts ~/Codex-Excalidraw/artifacts/excalidraw
-```
-
-跳过可选步骤：
-
-```sh
-npm run setup -- --skip-playwright
-npm run setup -- --skip-link
-```
-
-安装时运行烟测：
-
-```sh
-npm run setup -- --verify
-```
-
-## Libraries
-
-仓库自带一个可选的 Excalidraw library registry，里面有 wireframe、决策控件、商业画布和数据可视化组件。
-
-搜索本地 libraries：
-
-```sh
 excalidraw-codex library list
+
+搜索 library：
+
 excalidraw-codex library search "wireframe"
-excalidraw-codex library select "mobile onboarding flow"
-```
 
-只有在你选定某个公共 library 后再安装：
+安装后，素材会出现在 Excalidraw 的 Library 面板里。
 
-```sh
-excalidraw-codex library remote-search "kanban"
-excalidraw-codex library install <official-id-or-source>
-```
+⸻
 
-已安装的 libraries 会在工作台启动时加载到 Excalidraw 的 Library 面板。
+常见问题
 
-## 配置
+这是图片生成工具吗？
 
-setup 会写入本地配置：
+不是。
 
-```text
-~/.codex-excalidraw/config.json
-```
+它生成的是 Excalidraw 画布内容，里面的元素可以继续编辑、拖拽、复制和修改。
 
-常用环境变量：
+我可以手动修改 AI 画的图吗？
 
-```sh
-export EXCALIDRAW_CODEX_HOME=~/Codex-Excalidraw
-export EXCALIDRAW_CODEX_ARTIFACTS_DIR=~/Codex-Excalidraw/artifacts/excalidraw
-export EXCALIDRAW_CODEX_CONFIG_DIR=~/.codex-excalidraw
-export EXCALIDRAW_CODEX_FONT=Nunito
-export EXCALIDRAW_CODEX_CANVAS_BACKGROUND="#f8f9fa"
-export EXCALIDRAW_CODEX_SNAPSHOT_LIMIT=80
-```
+可以。
 
-## 开发
+你可以在浏览器里直接修改画布。修改后，AI 可以继续读取当前画布，并基于你的修改继续优化。
 
-```sh
-npm install
-npm run build
-npm run test:mcp
-npm run test:live
-npm run verify
-npm run dev
-```
+它和 Mermaid 有什么区别？
 
-`npm run verify` 会运行生产构建、MCP 烟测和 live-browser 烟测。
+Mermaid 更适合用文本快速生成结构化图表。
+Excalidraw 更适合做自由画布、低保真草图、白板讨论和可视化表达。
 
-## 仓库卫生
+你也可以先用 Mermaid 生成基础结构，再让 AI 转成 Excalidraw 画布继续编辑。
 
-这个仓库应该发布工具本身，不应该提交本地工作状态。
+适合谁用？
 
-不要提交：
+适合经常需要把想法画出来的人，例如：
 
-- `artifacts/excalidraw/` 下生成的画布和导出图；
-- `dist/` 和 `node_modules/`；
-- 本地 `.env` 文件；
-- `AGENTS.md`、`CLAUDE.md` 等本地 Agent 指令；
-- 私有笔记、草稿、计划文档或讨论记录。
+* 产品经理
+* 设计师
+* 独立开发者
+* 工程师
+* 技术写作者
+* 使用 Codex / Claude Code 做项目开发的人
 
-## License
+⸻
+
+License
 
 MIT
