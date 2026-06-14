@@ -44,17 +44,32 @@ type InstalledLibrariesResponse = {
 type LiveSceneResponse = {
   ok: boolean;
   scene: string;
+  sessionId?: string;
   live: boolean;
   updatedAt: string;
   revision: string;
+  clientRevision?: string;
   clientId: string;
   source: string;
+  previewUpdated?: boolean;
   activeElementCount: number;
+  conflict?: boolean;
   sceneData?: ExcalidrawScene;
 };
 
 const FALLBACK_SCENE_NAME = "untitled.excalidraw";
 const DEFAULT_FONT_FAMILY = 6;
+
+function liveSourceLabel(source: string) {
+  if (source === "mcp" || source === "mcp-reveal" || source === "mcp-export") return "Codex";
+  if (source === "workbench") return "the browser";
+  return "a collaborator";
+}
+
+function liveStatusMessage(live: LiveSceneResponse) {
+  if (live.previewUpdated) return "Preview updated";
+  return `Canvas updated from ${liveSourceLabel(live.source)}`;
+}
 
 function normalizeFileName(value: string) {
   const trimmed = value.trim() || FALLBACK_SCENE_NAME;
@@ -114,6 +129,7 @@ export default function App() {
   const apiRef = useRef<ExcalidrawApi | null>(null);
   const latestSceneRef = useRef<ExcalidrawScene>(createBlankScene(DEFAULT_FONT_FAMILY));
   const liveSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const galleryRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const liveSyncRevisionRef = useRef(0);
   const liveSyncClientIdRef = useRef(`workbench-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`);
   const liveAppliedRevisionRef = useRef<string | null>(null);
@@ -132,41 +148,30 @@ export default function App() {
 
   const activeSceneLabel = useMemo(() => normalizeFileName(sceneName), [sceneName]);
 
-  const syncLiveScene = useCallback(async (name: string, scene: ExcalidrawScene) => {
-    liveSyncRevisionRef.current += 1;
-    const response = await fetch(`/api/live-scenes/${encodeURIComponent(name)}`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        scene,
-        revision: `${Date.now()}-${liveSyncRevisionRef.current}`,
-        clientId: liveSyncClientIdRef.current,
-        source: "workbench"
-      })
-    });
+  const refreshScenes = useCallback(async () => {
+    const response = await fetch("/api/scenes");
     if (!response.ok) {
-      throw new Error(`Unable to sync live canvas for ${name}`);
+      throw new Error(`Unable to list scenes: ${response.status}`);
     }
-    const live = (await response.json()) as LiveSceneResponse;
-    liveAppliedRevisionRef.current = live.revision;
+    const data = (await response.json()) as SceneSummary[];
+    setScenes(data);
+    setStatusTone("neutral");
   }, []);
 
-  const scheduleLiveSync = useCallback(
-    (scene: ExcalidrawScene) => {
-      const targetName = normalizeFileName(sceneName);
-      if (liveSyncTimerRef.current) {
-        clearTimeout(liveSyncTimerRef.current);
+  const scheduleGalleryRefresh = useCallback(
+    (delayMs = 1200) => {
+      if (galleryRefreshTimerRef.current) {
+        clearTimeout(galleryRefreshTimerRef.current);
       }
-      liveSyncTimerRef.current = setTimeout(() => {
-        syncLiveScene(targetName, scene).catch((error: unknown) => {
+      galleryRefreshTimerRef.current = setTimeout(() => {
+        galleryRefreshTimerRef.current = null;
+        refreshScenes().catch((error: unknown) => {
           setStatus(error instanceof Error ? error.message : String(error));
           setStatusTone("error");
         });
-      }, 650);
+      }, delayMs);
     },
-    [sceneName, syncLiveScene]
+    [refreshScenes]
   );
 
   const applyRemoteLiveScene = useCallback(
@@ -186,40 +191,111 @@ export default function App() {
         files: normalized.files
       });
       setInitialData(toInitialData(normalized, normalized.elements.length > 0));
-      setStatus(`Applied live update from ${live.source}`);
+      setStatus(liveStatusMessage(live));
       setStatusTone("neutral");
+      scheduleGalleryRefresh(live.previewUpdated ? 80 : 1200);
     },
-    [excalidrawApi]
+    [excalidrawApi, scheduleGalleryRefresh]
   );
 
-  const refreshScenes = useCallback(async () => {
-    const response = await fetch("/api/scenes");
+  const handleIncomingLiveScene = useCallback(
+    (live: LiveSceneResponse) => {
+      if (!live.sceneData) return;
+      if (live.clientId === liveSyncClientIdRef.current) {
+        liveAppliedRevisionRef.current = live.revision;
+        return;
+      }
+      if (live.revision === liveAppliedRevisionRef.current) return;
+      const liveUpdatedAt = Date.parse(live.updatedAt);
+      if (Number.isFinite(liveUpdatedAt) && localChangeAtRef.current > liveUpdatedAt + 250) {
+        return;
+      }
+      applyRemoteLiveScene(live);
+    },
+    [applyRemoteLiveScene]
+  );
+
+  const syncLiveScene = useCallback(async (name: string, scene: ExcalidrawScene) => {
+    liveSyncRevisionRef.current += 1;
+    const response = await fetch(`/api/live-scenes/${encodeURIComponent(name)}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        scene,
+        baseRevision: liveAppliedRevisionRef.current ?? undefined,
+        revision: `${Date.now()}-${liveSyncRevisionRef.current}`,
+        clientId: liveSyncClientIdRef.current,
+        source: "workbench"
+      })
+    });
     if (!response.ok) {
-      throw new Error(`Unable to list scenes: ${response.status}`);
+      const payload = await response.json().catch(() => null) as LiveSceneResponse | null;
+      if (payload?.conflict) {
+        setStatus(`Canvas changed elsewhere; reloading the latest version of ${name}`);
+        setStatusTone("error");
+        const latestResponse = await fetch(`/api/live-scenes/${encodeURIComponent(name)}?includeScene=true`);
+        if (latestResponse.ok) {
+          const latest = (await latestResponse.json()) as LiveSceneResponse;
+          applyRemoteLiveScene(latest);
+        }
+        return;
+      }
+      throw new Error(`Unable to sync live canvas for ${name}`);
     }
-    const data = (await response.json()) as SceneSummary[];
-    setScenes(data);
-    setStatusTone("neutral");
-  }, []);
+    const live = (await response.json()) as LiveSceneResponse;
+    liveAppliedRevisionRef.current = live.revision;
+  }, [applyRemoteLiveScene]);
+
+  const scheduleLiveSync = useCallback(
+    (scene: ExcalidrawScene) => {
+      const targetName = normalizeFileName(sceneName);
+      if (liveSyncTimerRef.current) {
+        clearTimeout(liveSyncTimerRef.current);
+      }
+      liveSyncTimerRef.current = setTimeout(() => {
+        syncLiveScene(targetName, scene).catch((error: unknown) => {
+          setStatus(error instanceof Error ? error.message : String(error));
+          setStatusTone("error");
+        });
+      }, 650);
+    },
+    [sceneName, syncLiveScene]
+  );
 
   const loadScene = useCallback(
     async (name: string) => {
+      const targetName = normalizeFileName(name);
       setIsBusy(true);
       try {
-        const response = await fetch(`/api/scenes/${encodeURIComponent(name)}`);
+        const response = await fetch(`/api/scenes/${encodeURIComponent(targetName)}`);
         if (!response.ok) {
-          throw new Error(`Unable to load ${name}`);
+          if (response.status === 404) {
+            const blank = createBlankScene(defaultFontFamily);
+            latestSceneRef.current = blank;
+            liveAppliedRevisionRef.current = null;
+            localChangeAtRef.current = 0;
+            setSceneName(targetName);
+            setInitialData(toInitialData(blank, false));
+            setCanvasKey((value) => value + 1);
+            setStatus(`Waiting for live canvas ${targetName}`);
+            setStatusTone("neutral");
+            window.history.replaceState(null, "", `/?scene=${encodeURIComponent(targetName)}`);
+            return;
+          }
+          throw new Error(`Unable to load ${targetName}`);
         }
         const scene = normalizeLoadedScene((await response.json()) as ExcalidrawScene);
         latestSceneRef.current = scene;
         liveAppliedRevisionRef.current = null;
         localChangeAtRef.current = 0;
-        setSceneName(name);
+        setSceneName(targetName);
         setInitialData(toInitialData(scene, scene.elements.length > 0));
         setCanvasKey((value) => value + 1);
-        setStatus(`Loaded ${name}`);
+        setStatus(`Loaded ${targetName}`);
         setStatusTone("neutral");
-        window.history.replaceState(null, "", `/?scene=${encodeURIComponent(name)}`);
+        window.history.replaceState(null, "", `/?scene=${encodeURIComponent(targetName)}`);
       } catch (error) {
         setStatus(error instanceof Error ? error.message : String(error));
         setStatusTone("error");
@@ -227,7 +303,7 @@ export default function App() {
         setIsBusy(false);
       }
     },
-    []
+    [defaultFontFamily]
   );
 
   useEffect(() => {
@@ -283,16 +359,7 @@ export default function App() {
         if (!response.ok) return;
         const live = (await response.json()) as LiveSceneResponse;
         if (cancelled || !live.sceneData) return;
-        if (live.clientId === liveSyncClientIdRef.current) {
-          liveAppliedRevisionRef.current = live.revision;
-          return;
-        }
-        if (live.revision === liveAppliedRevisionRef.current) return;
-        const liveUpdatedAt = Date.parse(live.updatedAt);
-        if (Number.isFinite(liveUpdatedAt) && localChangeAtRef.current > liveUpdatedAt + 250) {
-          return;
-        }
-        applyRemoteLiveScene(live);
+        handleIncomingLiveScene(live);
       } catch {
         // Live updates are opportunistic; keep the workbench usable if polling fails.
       }
@@ -307,12 +374,32 @@ export default function App() {
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [activeSceneLabel, applyRemoteLiveScene, excalidrawApi]);
+  }, [activeSceneLabel, excalidrawApi, handleIncomingLiveScene]);
+
+  useEffect(() => {
+    if (!excalidrawApi || typeof EventSource === "undefined") return;
+    const events = new EventSource(`/api/live-scenes/${encodeURIComponent(activeSceneLabel)}/events`);
+    const onLiveScene = (event: MessageEvent) => {
+      try {
+        handleIncomingLiveScene(JSON.parse(event.data) as LiveSceneResponse);
+      } catch {
+        // Polling remains the fallback for malformed or interrupted SSE events.
+      }
+    };
+    events.addEventListener("live-scene", onLiveScene);
+    return () => {
+      events.removeEventListener("live-scene", onLiveScene);
+      events.close();
+    };
+  }, [activeSceneLabel, excalidrawApi, handleIncomingLiveScene]);
 
   useEffect(() => {
     return () => {
       if (liveSyncTimerRef.current) {
         clearTimeout(liveSyncTimerRef.current);
+      }
+      if (galleryRefreshTimerRef.current) {
+        clearTimeout(galleryRefreshTimerRef.current);
       }
     };
   }, []);

@@ -39,7 +39,9 @@ import {
 import {
   clearLiveScene,
   getLiveScene,
+  getLiveSceneStatus,
   listLiveScenes,
+  subscribeLiveScene,
   updateLiveScene
 } from "./live-canvas.mjs";
 import { exportSceneToExcalidrawUrl } from "./excalidraw-share.mjs";
@@ -52,12 +54,13 @@ const SERVER_CAPABILITIES = {
   workbench: true,
   canvasBridge: true,
   mcpCanvasBridge: true,
-  mcpCompatibilityTools: true,
+  mcpWorkflowTools: true,
   createViewProtocol: true,
   progressiveReveal: true,
   mcpMermaidConversion: true,
-  mcpSceneFileIo: true,
   liveCanvas: true,
+  liveCanvasRevisions: true,
+  liveCanvasSse: true,
   bidirectionalLiveBridge: true,
   libraries: true,
   browserExport: true,
@@ -70,12 +73,13 @@ const SERVER_CAPABILITIES = {
 const REQUIRED_SERVER_CAPABILITIES = [
   "canvasBridge",
   "mcpCanvasBridge",
-  "mcpCompatibilityTools",
+  "mcpWorkflowTools",
   "createViewProtocol",
   "progressiveReveal",
   "mcpMermaidConversion",
-  "mcpSceneFileIo",
   "liveCanvas",
+  "liveCanvasRevisions",
+  "liveCanvasSse",
   "bidirectionalLiveBridge",
   "libraries",
   "browserExport",
@@ -295,7 +299,19 @@ function isStructuralContainment(first, second) {
   if (isContainerElement(second) && containsBounds(secondBounds, firstBounds, 8)) return true;
   if ((first.groupIds || []).some((groupId) => (second.groupIds || []).includes(groupId))) return true;
   if (first.containerId === second.id || second.containerId === first.id) return true;
+  if (isTextInsideVisualHost(first, second, firstBounds, secondBounds)) return true;
   return false;
+}
+
+function isTextInsideVisualHost(first, second, firstBounds = elementBounds(first), secondBounds = elementBounds(second)) {
+  const text = first?.type === "text" ? first : second?.type === "text" ? second : null;
+  const host = text === first ? second : first;
+  const textBounds = text === first ? firstBounds : secondBounds;
+  const hostBounds = host === first ? firstBounds : secondBounds;
+  if (!text || !host || ["text", "arrow", "line", "freedraw"].includes(host.type)) return false;
+  if (text.containerId && text.containerId !== host.id) return false;
+  if (text.customData?.labelFor && text.customData.labelFor !== host.id) return false;
+  return containsBounds(hostBounds, textBounds, 12);
 }
 
 function detectPolishIssues(scene, elements) {
@@ -820,6 +836,16 @@ function normalizePatchPlan(plan) {
   return operations;
 }
 
+const RESERVED_PATCH_ELEMENT_TYPES = new Set(["cameraUpdate", "restoreCheckpoint", "delete"]);
+
+function assertPatchAddElement(element = {}) {
+  if (RESERVED_PATCH_ELEMENT_TYPES.has(element.type)) {
+    throw new Error(
+      `Pseudo element type "${element.type}" is only supported in create_view elements, not apply_canvas_patch add operations.`
+    );
+  }
+}
+
 function applyPatchPlan(scene, plan, options = {}) {
   const nextScene = cloneScene(scene);
   const operations = normalizePatchPlan(plan);
@@ -833,6 +859,9 @@ function applyPatchPlan(scene, plan, options = {}) {
 
     if (op === "add") {
       const elementsToAdd = operation.elements || [operation.element || operation];
+      for (const element of elementsToAdd) {
+        assertPatchAddElement(element);
+      }
       const added = elementsToAdd.map((element) => defaultElement(element));
       nextScene.elements.push(...added);
       report.push({ op, added: added.map(compactElement) });
@@ -1871,6 +1900,16 @@ function baseUrlFromRequest(request) {
   return `${request.protocol}://${request.get("host")}/`;
 }
 
+function assetVariantSuffix(input) {
+  const value = String(input || "")
+    .trim()
+    .replace(/[^a-zA-Z0-9._-]/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^[.-]+|[.-]+$/g, "")
+    .slice(0, 48);
+  return value ? `.${value}` : "";
+}
+
 async function exportSceneAsset(name, options = {}) {
   const fileName = normalizeSceneName(name);
   const format = options.format === "svg" ? "svg" : "png";
@@ -1882,7 +1921,7 @@ async function exportSceneAsset(name, options = {}) {
     const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
     await page.goto(
       `${baseUrl.replace(/\/$/, "")}/export.html?scene=${encodeURIComponent(fileName)}&format=${format}`,
-      { waitUntil: "networkidle" }
+      { waitUntil: "domcontentloaded" }
     );
     await page.waitForFunction(
       () => window.__EXCALIDRAW_EXPORT_RESULT__ || window.__EXCALIDRAW_EXPORT_ERROR__,
@@ -1894,7 +1933,7 @@ async function exportSceneAsset(name, options = {}) {
       throw new Error(error);
     }
     const result = await page.evaluate(() => window.__EXCALIDRAW_EXPORT_RESULT__);
-    const outputName = fileName.replace(/\.excalidraw$/, `.${format}`);
+    const outputName = fileName.replace(/\.excalidraw$/, `${assetVariantSuffix(options.variant)}.${format}`);
     const outputPath = path.join(artifactsDir, outputName);
     if (format === "png") {
       const base64 = result.content.replace(/^data:image\/png;base64,/, "");
@@ -2009,6 +2048,12 @@ function configureApi(app) {
     response.json({ ok: true, scenes: listLiveScenes() });
   });
 
+  app.get("/api/live-scenes/:name/status", (request, response) => {
+    response.json(getLiveSceneStatus(request.params.name, {
+      includeScene: request.query.includeScene === "true"
+    }));
+  });
+
   app.get("/api/live-scenes/:name", (request, response) => {
     const live = getLiveScene(request.params.name, {
       includeScene: request.query.includeScene === "true"
@@ -2020,17 +2065,43 @@ function configureApi(app) {
     response.json(live);
   });
 
+  app.get("/api/live-scenes/:name/events", (request, response) => {
+    response.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no"
+    });
+    const unsubscribe = subscribeLiveScene(request.params.name, (payload) => {
+      const live = getLiveScene(request.params.name, { includeScene: true });
+      response.write(`event: live-scene\ndata: ${JSON.stringify(live || payload)}\n\n`);
+    });
+    response.write(`event: ready\ndata: ${JSON.stringify({
+      ...getLiveSceneStatus(request.params.name),
+      subscribedAt: new Date().toISOString()
+    })}\n\n`);
+
+    request.on("close", unsubscribe);
+  });
+
   app.post("/api/live-scenes/:name", (request, response, next) => {
     try {
       const scene = request.body?.scene || request.body;
       if (!scene || scene.type !== "excalidraw" || !Array.isArray(scene.elements)) {
         throw new Error("Live scene payload must be an Excalidraw scene.");
       }
-      response.json(updateLiveScene(request.params.name, scene, {
+      const result = updateLiveScene(request.params.name, scene, {
+        baseRevision: request.body?.baseRevision,
         revision: request.body?.revision,
         clientId: request.body?.clientId,
-        source: request.body?.source || "workbench"
-      }));
+        source: request.body?.source || "workbench",
+        previewUpdated: Boolean(request.body?.previewUpdated)
+      });
+      if (result.conflict) {
+        response.status(409).json(result);
+        return;
+      }
+      response.json(result);
     } catch (error) {
       next(error);
     }
@@ -2229,7 +2300,7 @@ function configureApi(app) {
         label: request.body?.label || "before-api-patch",
         snapshot: request.body?.snapshot !== false
       });
-      if (!result.dryRun && request.body?.refreshPreview !== false) {
+      if (!result.dryRun && request.body?.refreshPreview === true) {
         result.preview = await exportSceneAsset(request.params.name, {
           baseUrl: baseUrlFromRequest(request),
           format: "png"
@@ -2248,7 +2319,7 @@ function configureApi(app) {
         label: request.body?.label || "before-api-layout",
         snapshot: request.body?.snapshot !== false
       });
-      if (!result.dryRun && request.body?.refreshPreview !== false) {
+      if (!result.dryRun && request.body?.refreshPreview === true) {
         result.preview = await exportSceneAsset(request.params.name, {
           baseUrl: baseUrlFromRequest(request),
           format: "png"
@@ -2267,7 +2338,7 @@ function configureApi(app) {
         label: request.body?.label || "before-api-polish",
         snapshot: request.body?.snapshot !== false
       });
-      if (!result.dryRun && request.body?.refreshPreview !== false) {
+      if (!result.dryRun && request.body?.refreshPreview === true) {
         result.preview = await exportSceneAsset(request.params.name, {
           baseUrl: baseUrlFromRequest(request),
           format: "png"

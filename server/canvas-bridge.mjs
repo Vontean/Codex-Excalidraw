@@ -1,12 +1,10 @@
 import { promises as fs } from "node:fs";
-import path from "node:path";
 import {
   artifactsDir,
   defaultFontFamily,
   defaultFontFamilyName,
   getRuntimeConfig
 } from "./config.mjs";
-import { createLibraryItemElements, inspectRegisteredLibrary, searchLibraryRegistry } from "./library-registry.mjs";
 import {
   createSnapshot,
   listScenes,
@@ -19,15 +17,12 @@ import {
 } from "./scene-workspace.mjs";
 import {
   exportSceneAsset,
-  inspectSceneFile,
-  layoutSceneFile,
   patchSceneFile,
-  polishSceneFile,
   qaScene,
   summarizeScene
 } from "./server.mjs";
 import { readDiagramGuide } from "./diagram-guide.mjs";
-import { convertMermaidToScene, createSceneFromElements } from "./mermaid-scene.mjs";
+import { convertMermaidToScene } from "./mermaid-scene.mjs";
 import { exportSceneToExcalidrawUrl } from "./excalidraw-share.mjs";
 
 const SCENE_SOURCE = "https://codex.local/excalidraw-codex";
@@ -52,9 +47,44 @@ async function fetchLiveScene(scene, input = {}) {
     const live = await response.json();
     if (!live?.sceneData || live.sceneData.type !== "excalidraw" || !Array.isArray(live.sceneData.elements)) return null;
     return live;
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("Live canvas conflict")) {
+      throw error;
+    }
+    return null;
+  }
+}
+
+async function fetchLiveSceneStatus(scene, input = {}) {
+  const sceneName = normalizeSceneName(scene);
+  try {
+    const response = await fetch(
+      apiUrl(`/api/live-scenes/${encodeURIComponent(sceneName)}/status`, input.baseUrl)
+    );
+    if (!response.ok) return null;
+    return await response.json();
   } catch {
     return null;
   }
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForWorkbenchSubscriber(scene, input = {}) {
+  const waitMs = Math.max(0, Number(input.waitForSubscriberMs || 0));
+  const sceneName = normalizeSceneName(scene);
+  let status = await fetchLiveSceneStatus(sceneName, input);
+  if (!waitMs || status?.browserReady) return status;
+
+  const deadline = Date.now() + waitMs;
+  while (Date.now() < deadline) {
+    await sleep(100);
+    status = await fetchLiveSceneStatus(sceneName, input);
+    if (status?.browserReady) return status;
+  }
+  return status;
 }
 
 async function readCanvasScene(scene, input = {}) {
@@ -80,6 +110,9 @@ async function materializeLiveScene(scene, input = {}) {
   if (!live?.sceneData) {
     return null;
   }
+  if (live.revision && !input.baseRevision && !input._liveBaseRevision) {
+    input._liveBaseRevision = live.revision;
+  }
   await writeScene(sceneName, live.sceneData);
   return live;
 }
@@ -95,15 +128,54 @@ async function pushLiveScene(scene, sceneData, input = {}) {
       },
       body: JSON.stringify({
         scene: sceneData,
+        baseRevision: input._liveBaseRevision || input.baseRevision,
         revision: input.revision || `mcp-${Date.now()}`,
         clientId: input.clientId || "excalidraw-codex-mcp",
-        source: input.source || "mcp"
+        source: input.source || "mcp",
+        previewUpdated: Boolean(input.previewUpdated)
       })
     });
-    if (!response.ok) return null;
-    return response.json();
-  } catch {
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      if (payload?.conflict) {
+        throw new Error(
+          `Live canvas conflict for ${sceneName}: baseRevision ${payload.baseRevision} is stale; current revision is ${payload.currentRevision}. Read the live canvas again before continuing.`
+        );
+      }
+      return payload || { ok: false, status: response.status };
+    }
+    if (payload?.revision) {
+      input._liveBaseRevision = payload.revision;
+    }
+    return payload;
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("Live canvas conflict")) {
+      throw error;
+    }
     return null;
+  }
+}
+
+function shouldRefreshScenePreview(input = {}) {
+  if (input.dryRun) return false;
+  return input.refreshPreview === true || input.preview === true;
+}
+
+async function refreshScenePreview(scene, input = {}) {
+  if (!shouldRefreshScenePreview(input)) return undefined;
+  const sceneName = normalizeSceneName(scene);
+  try {
+    return await exportSceneAsset(sceneName, {
+      format: input.previewFormat || "png",
+      baseUrl: input.baseUrl || DEFAULT_WORKBENCH_URL
+    });
+  } catch (error) {
+    return {
+      ok: false,
+      scene: sceneName,
+      format: "png",
+      error: error instanceof Error ? error.message : String(error)
+    };
   }
 }
 
@@ -120,7 +192,7 @@ async function fetchLiveStatus(input = {}) {
         status: response.status
       };
     }
-    return response.json();
+    return await response.json();
   } catch (error) {
     return {
       ok: false,
@@ -212,78 +284,10 @@ function activeElements(scene) {
     : [];
 }
 
-function matchesSelector(element, selector = {}) {
-  if (!selector || selector.all) return true;
-  if (Array.isArray(selector.ids) && selector.ids.length && !selector.ids.includes(element.id)) return false;
-  if (selector.id && element.id !== selector.id) return false;
-  if (selector.type && element.type !== selector.type) return false;
-  if (selector.role && element.customData?.codexRole !== selector.role) return false;
-  if (selector.kind && element.customData?.codexKind !== selector.kind) return false;
-  if (selector.groupId && !(element.groupIds || []).includes(selector.groupId)) return false;
-  if (selector.text && elementText(element) !== selector.text) return false;
-  if (selector.textIncludes && !elementText(element).toLowerCase().includes(String(selector.textIncludes).toLowerCase())) return false;
-  if (selector.bounds) {
-    const bounds = elementBounds(element);
-    const target = selector.bounds;
-    if (target.x !== undefined && bounds.right < Number(target.x)) return false;
-    if (target.y !== undefined && bounds.bottom < Number(target.y)) return false;
-    if (target.right !== undefined && bounds.x > Number(target.right)) return false;
-    if (target.bottom !== undefined && bounds.y > Number(target.bottom)) return false;
-  }
-  return true;
-}
-
-function selectCanvasElements(scene, input = {}) {
-  const selector = input.selector || input.target || input;
-  return activeElements(scene).filter((element) => matchesSelector(element, selector));
-}
-
 function touchElement(element) {
   element.version = Number(element.version || 0) + 1;
   element.versionNonce = Math.floor(Math.random() * 2_147_483_647);
   element.updated = Date.now();
-}
-
-function cloneElementsForDuplicate(elements, options = {}) {
-  const offsetX = Number(options.offsetX ?? options.dx ?? 40);
-  const offsetY = Number(options.offsetY ?? options.dy ?? 40);
-  const prefix = options.prefix || `dup-${Date.now().toString(36)}`;
-  const idMap = new Map();
-  const groupMap = new Map();
-  const nextId = (oldId, index) => {
-    if (!idMap.has(oldId)) idMap.set(oldId, `${prefix}-${index}-${String(oldId || "element").slice(0, 10)}`);
-    return idMap.get(oldId);
-  };
-  const nextGroupId = (oldId) => {
-    if (!groupMap.has(oldId)) groupMap.set(oldId, `${prefix}-group-${groupMap.size + 1}`);
-    return groupMap.get(oldId);
-  };
-
-  elements.forEach((element, index) => nextId(element.id, index));
-  return elements.map((element, index) => {
-    const next = JSON.parse(JSON.stringify(element));
-    next.id = nextId(element.id, index);
-    next.x = Number(next.x || 0) + offsetX;
-    next.y = Number(next.y || 0) + offsetY;
-    next.groupIds = Array.isArray(next.groupIds) ? next.groupIds.map(nextGroupId) : [];
-    if (next.startBinding?.elementId && idMap.has(next.startBinding.elementId)) next.startBinding.elementId = idMap.get(next.startBinding.elementId);
-    if (next.endBinding?.elementId && idMap.has(next.endBinding.elementId)) next.endBinding.elementId = idMap.get(next.endBinding.elementId);
-    if (next.start?.id && idMap.has(next.start.id)) next.start.id = idMap.get(next.start.id);
-    if (next.end?.id && idMap.has(next.end.id)) next.end.id = idMap.get(next.end.id);
-    if (next.containerId && idMap.has(next.containerId)) next.containerId = idMap.get(next.containerId);
-    if (Array.isArray(next.boundElements)) {
-      next.boundElements = next.boundElements.map((boundElement) => ({
-        ...boundElement,
-        id: idMap.get(boundElement.id) || boundElement.id
-      }));
-    }
-    next.customData = {
-      ...(next.customData || {}),
-      duplicatedFrom: element.id
-    };
-    touchElement(next);
-    return next;
-  });
 }
 
 function parseElementInput(input = {}) {
@@ -473,10 +477,6 @@ function revealChunkSize(input = {}) {
   return Math.max(1, Math.min(24, Math.round(Number(input.revealChunkSize || input.chunkSize || 6))));
 }
 
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 function splitCreateViewRevealStages(elements = [], input = {}) {
   const stages = [];
   let currentCamera = null;
@@ -520,13 +520,14 @@ async function applyCreateViewReveal(scene, baseScene, parsedElements, input = {
   let appliedStages = 0;
   let deleted = 0;
   let current = baseScene;
+  const revealInput = {
+    ...input,
+    source: "mcp-reveal"
+  };
 
   await writeScene(scene, current);
-  await pushLiveScene(scene, current, {
-    ...input,
-    source: "mcp-reveal",
-    revision: `mcp-reveal-${Date.now()}-0`
-  });
+  revealInput.revision = `mcp-reveal-${Date.now()}-0`;
+  await pushLiveScene(scene, current, revealInput);
 
   for (const [index, stage] of stages.entries()) {
     if (stage.camera) {
@@ -552,15 +553,15 @@ async function applyCreateViewReveal(scene, baseScene, parsedElements, input = {
     } else if (stage.camera || deleteIds.length) {
       await writeScene(scene, current);
     }
-    await pushLiveScene(scene, current, {
-      ...input,
-      source: "mcp-reveal",
-      revision: `mcp-reveal-${Date.now()}-${index + 1}`
-    });
+    revealInput.revision = `mcp-reveal-${Date.now()}-${index + 1}`;
+    await pushLiveScene(scene, current, revealInput);
     appliedStages += 1;
     if (delayMs > 0 && index < stages.length - 1) {
       await sleep(delayMs);
     }
+  }
+  if (revealInput._liveBaseRevision) {
+    input._liveBaseRevision = revealInput._liveBaseRevision;
   }
 
   return {
@@ -569,49 +570,6 @@ async function applyCreateViewReveal(scene, baseScene, parsedElements, input = {
     deleted,
     delayMs
   };
-}
-
-function elementCenterForArrange(element) {
-  const bounds = elementBounds(element);
-  return {
-    x: bounds.x + bounds.width / 2,
-    y: bounds.y + bounds.height / 2
-  };
-}
-
-function describeSceneText(scene, name, options = {}) {
-  const summary = compactSummary(scene, name, { ...options, maxElements: options.maxElements || 160 });
-  const lines = [
-    `Scene: ${name}`,
-    `Source: ${options.source || "file"}`,
-    `Elements: ${activeElements(scene).length}`,
-    `Bounds: ${JSON.stringify(summary.scene?.bounds || {})}`
-  ];
-  if (summary.texts?.length) {
-    lines.push("Texts:");
-    for (const text of summary.texts.slice(0, 24)) {
-      lines.push(`- ${text.text || text.label || ""}`);
-    }
-  }
-  if (summary.regions?.length) {
-    lines.push("Regions:");
-    for (const region of summary.regions.slice(0, 16)) {
-      lines.push(`- ${region.label || region.id || "region"} at ${region.x},${region.y} ${region.width}x${region.height}`);
-    }
-  }
-  if (summary.connections?.length) {
-    lines.push("Connections:");
-    for (const connection of summary.connections.slice(0, 24)) {
-      lines.push(`- ${connection.from || "?"} -> ${connection.to || "?"}${connection.label ? ` (${connection.label})` : ""}`);
-    }
-  }
-  if (summary.layoutIssues?.length) {
-    lines.push("Layout issues:");
-    for (const issue of summary.layoutIssues.slice(0, 12)) {
-      lines.push(`- ${issue.severity || "warning"}: ${issue.message || issue.type}`);
-    }
-  }
-  return lines.join("\n");
 }
 
 function compactSummary(scene, name, options = {}) {
@@ -633,10 +591,13 @@ function compactSummary(scene, name, options = {}) {
     source: options.source || "file",
     live: options.live
       ? {
+          sessionId: options.live.sessionId,
           updatedAt: options.live.updatedAt,
           revision: options.live.revision,
+          clientRevision: options.live.clientRevision,
           clientId: options.live.clientId,
-          source: options.live.source
+          source: options.live.source,
+          activeElementCount: options.live.activeElementCount
         }
       : undefined
   };
@@ -651,13 +612,53 @@ export async function openOrCreateCanvas(input = {}) {
       backgroundColor: input.backgroundColor
     }));
   }
+  const workbenchStatus = await waitForWorkbenchSubscriber(scene, input);
   const current = await readCanvasScene(scene, input);
+  const liveStatus = current.live
+    ? {
+        ok: true,
+        live: true,
+        sessionId: current.live.sessionId,
+        updatedAt: current.live.updatedAt,
+        revision: current.live.revision,
+        clientId: current.live.clientId,
+        source: current.live.source,
+        activeElementCount: current.live.activeElementCount,
+        subscriberCount: current.live.subscriberCount,
+        browserReady: current.live.browserReady
+      }
+    : {
+        ok: false,
+        live: false,
+        scene,
+        subscriberCount: workbenchStatus?.subscriberCount || 0,
+        browserReady: Boolean(workbenchStatus?.browserReady)
+      };
   return {
     ok: true,
     scene,
     created,
     path: scenePath(scene),
     browserUrl: browserUrl(scene, input.baseUrl),
+    session: {
+      scene,
+      sessionId: current.live?.sessionId || `file:${scene}`,
+      browserUrl: browserUrl(scene, input.baseUrl),
+      source: current.source,
+      live: Boolean(current.live),
+      baseRevision: current.live?.revision || null
+    },
+    liveStatus,
+    readiness: {
+      editable: true,
+      workbenchUrl: input.baseUrl || DEFAULT_WORKBENCH_URL,
+      liveApi: current.live ? "ready" : "file-fallback",
+      browserReady: Boolean(workbenchStatus?.browserReady),
+      subscriberCount: workbenchStatus?.subscriberCount || 0,
+      waitForSubscriberMs: Math.max(0, Number(input.waitForSubscriberMs || 0)),
+      conflictPolicy: "baseRevision is enforced when provided"
+    },
+    baseRevision: current.live?.revision || null,
     context: compactSummary(current.scene, scene, { ...input, source: current.source, live: current.live })
   };
 }
@@ -675,36 +676,6 @@ export async function getCanvasContext(input = {}) {
   };
 }
 
-export async function queryCanvasElements(input = {}) {
-  const scene = normalizeSceneName(input.scene || input.name);
-  const current = await readCanvasScene(scene, input);
-  const matches = selectCanvasElements(current.scene, input);
-  const limit = Number(input.limit || 80);
-  return {
-    ok: true,
-    scene,
-    source: current.source,
-    count: matches.length,
-    elements: (input.includeRaw ? matches : matches.map(compactElement)).slice(0, limit),
-    truncated: matches.length > limit
-  };
-}
-
-export async function getCanvasElement(input = {}) {
-  const scene = normalizeSceneName(input.scene || input.name);
-  const current = await readCanvasScene(scene, input);
-  const element = activeElements(current.scene).find((item) => item.id === input.id);
-  if (!element) {
-    throw new Error(`Element not found: ${input.id}`);
-  }
-  return {
-    ok: true,
-    scene,
-    source: current.source,
-    element: input.includeRaw ? element : compactElement(element)
-  };
-}
-
 export async function applyCanvasPatch(input = {}) {
   const scene = normalizeSceneName(input.scene || input.name);
   const materializedLive = input.dryRun ? null : await materializeLiveScene(scene, input);
@@ -716,7 +687,11 @@ export async function applyCanvasPatch(input = {}) {
     refreshConnectors: input.refreshConnectors !== false
   });
   const current = input.dryRun ? result.scene : await readScene(scene);
-  if (!input.dryRun) await pushLiveScene(scene, current, input);
+  let preview;
+  if (!input.dryRun) {
+    await pushLiveScene(scene, current, input);
+    preview = await refreshScenePreview(scene, input);
+  }
   return {
     ok: true,
     scene,
@@ -728,6 +703,7 @@ export async function applyCanvasPatch(input = {}) {
         }
       : undefined,
     result,
+    preview,
     context: compactSummary(current, scene, { ...input, source: "file" })
   };
 }
@@ -740,6 +716,10 @@ export async function createCanvasView(input = {}) {
   const cameraUpdates = cameraUpdatesFromElements(parsedElements);
   const mode = input.mode || (restoreCheckpoint ? "append" : "replace");
   const existed = await sceneExists(scene);
+  if (!input.dryRun && !input.baseRevision && !input._liveBaseRevision) {
+    const live = await fetchLiveScene(scene, input);
+    if (live?.revision) input._liveBaseRevision = live.revision;
+  }
   const beforeSnapshot = input.dryRun || input.snapshot === false || !existed
     ? null
     : await createSnapshot(scene, { label: input.label || "before-create-view" });
@@ -752,6 +732,9 @@ export async function createCanvasView(input = {}) {
     restoredFrom = restored.path;
   } else if (mode === "append" && existed) {
     const current = await readCanvasScene(scene, input);
+    if (current.live?.revision && !input.baseRevision && !input._liveBaseRevision) {
+      input._liveBaseRevision = current.live.revision;
+    }
     baseScene = current.scene;
   } else {
     baseScene = createBlankScene({
@@ -827,6 +810,7 @@ export async function createCanvasView(input = {}) {
     await writeScene(scene, current);
     await pushLiveScene(scene, current, input);
   }
+  const preview = !input.dryRun ? await refreshScenePreview(scene, input) : undefined;
 
   return {
     ok: true,
@@ -850,36 +834,7 @@ export async function createCanvasView(input = {}) {
         }
       : { enabled: false },
     patch: patchResult,
-    context: compactSummary(current, scene, { ...input, source: input.dryRun ? "dry-run" : "file" })
-  };
-}
-
-export async function batchCreateElements(input = {}) {
-  const scene = normalizeSceneName(input.scene || input.name || "codex-canvas.excalidraw");
-  if (!(await sceneExists(scene))) {
-    await writeScene(scene, createBlankScene({
-      title: input.title,
-      backgroundColor: input.backgroundColor
-    }));
-  } else if (!input.dryRun) {
-    await materializeLiveScene(scene, input);
-  }
-  const ops = externalElementsToPatchOps(parseElementInput(input));
-  if (!ops.length) {
-    throw new Error("batch_create_elements did not contain drawable elements.");
-  }
-  const result = await patchSceneFile(scene, { ops }, {
-    dryRun: Boolean(input.dryRun),
-    snapshot: input.snapshot !== false,
-    label: input.label || "before-batch-create-elements",
-    refreshConnectors: input.refreshConnectors !== false
-  });
-  const current = input.dryRun ? result.scene : await readScene(scene);
-  if (!input.dryRun) await pushLiveScene(scene, current, input);
-  return {
-    ok: true,
-    scene,
-    result,
+    preview,
     context: compactSummary(current, scene, { ...input, source: input.dryRun ? "dry-run" : "file" })
   };
 }
@@ -908,14 +863,15 @@ export async function createCanvasFromMermaid(input = {}) {
     await writeScene(scene, sceneData);
     await pushLiveScene(scene, sceneData, input);
   }
-  if (!input.dryRun && (input.export || input.preview)) {
-    await exportCanvas({
+  const preview = !input.dryRun ? await refreshScenePreview(scene, input) : undefined;
+  const exported = !input.dryRun && input.export
+    ? await exportCanvas({
       ...input,
       scene,
       format: input.exportFormat || input.format || "png",
       materializeLive: false
-    });
-  }
+    })
+    : undefined;
   return {
     ok: true,
     scene,
@@ -923,299 +879,9 @@ export async function createCanvasFromMermaid(input = {}) {
     browserUrl: browserUrl(scene, input.baseUrl),
     snapshot,
     elementCount: activeElements(sceneData).length,
+    preview,
+    export: exported,
     context: compactSummary(sceneData, scene, { ...input, source: input.dryRun ? "dry-run" : "file" })
-  };
-}
-
-function resolveExternalPath(filePath) {
-  return path.resolve(process.cwd(), String(filePath || ""));
-}
-
-function sceneFromImportPayload(payload, input = {}) {
-  if (payload?.type === "excalidraw" && Array.isArray(payload.elements)) {
-    return {
-      ...payload,
-      appState: {
-        ...(payload.appState || {}),
-        codex: {
-          ...(payload.appState?.codex || {}),
-          importedAt: new Date().toISOString()
-        }
-      },
-      files: payload.files || {}
-    };
-  }
-  if (Array.isArray(payload)) {
-    return createSceneFromElements(payload, {}, {
-      backgroundColor: input.backgroundColor,
-      codex: {
-        generator: "import-elements",
-        importedAt: new Date().toISOString()
-      }
-    });
-  }
-  if (payload?.elements && Array.isArray(payload.elements)) {
-    return createSceneFromElements(payload.elements, payload.files || {}, {
-      backgroundColor: input.backgroundColor,
-      codex: {
-        ...(payload.appState?.codex || {}),
-        generator: "import-elements",
-        importedAt: new Date().toISOString()
-      }
-    });
-  }
-  throw new Error("Imported data must be an Excalidraw scene, an element array, or an object with elements.");
-}
-
-async function readImportPayload(input = {}) {
-  if (input.sceneData) return input.sceneData;
-  if (input.data) return typeof input.data === "string" ? JSON.parse(input.data) : input.data;
-  if (input.filePath || input.path) {
-    const raw = await fs.readFile(resolveExternalPath(input.filePath || input.path), "utf8");
-    return JSON.parse(raw);
-  }
-  throw new Error("import_scene requires filePath, data, or sceneData.");
-}
-
-export async function importCanvasScene(input = {}) {
-  const payload = await readImportPayload(input);
-  const importedScene = sceneFromImportPayload(payload, input);
-  const scene = normalizeSceneName(
-    input.scene ||
-      input.name ||
-      (input.filePath || input.path ? path.basename(input.filePath || input.path) : "imported-scene.excalidraw")
-  );
-  const existed = await sceneExists(scene);
-  if (existed && !input.dryRun) {
-    await materializeLiveScene(scene, input);
-  }
-  const snapshot = input.snapshot === false || !existed ? null : await createSnapshot(scene, {
-    label: input.label || "before-import-scene"
-  });
-  let nextScene = importedScene;
-  const mode = input.mode || "replace";
-  if (mode === "merge" && existed) {
-    const current = await readScene(scene);
-    nextScene = {
-      ...current,
-      elements: [...(current.elements || []), ...(importedScene.elements || [])],
-      files: {
-        ...(current.files || {}),
-        ...(importedScene.files || {})
-      },
-      appState: {
-        ...(current.appState || {}),
-        codex: {
-          ...(current.appState?.codex || {}),
-          lastImport: {
-            mode,
-            importedAt: new Date().toISOString(),
-            importedElementCount: activeElements(importedScene).length
-          }
-        }
-      }
-    };
-  }
-  if (!input.dryRun) {
-    await writeScene(scene, nextScene);
-    await pushLiveScene(scene, nextScene, input);
-  }
-  return {
-    ok: true,
-    scene,
-    mode,
-    path: scenePath(scene),
-    browserUrl: browserUrl(scene, input.baseUrl),
-    snapshot,
-    importedElementCount: activeElements(importedScene).length,
-    activeElementCount: activeElements(nextScene).length,
-    context: compactSummary(nextScene, scene, { ...input, source: input.dryRun ? "dry-run" : "file" })
-  };
-}
-
-export async function exportCanvasSceneFile(input = {}) {
-  const scene = normalizeSceneName(input.scene || input.name);
-  if (input.materializeLive !== false) {
-    await materializeLiveScene(scene, input);
-  }
-  const current = await readScene(scene);
-  let outputPath = scenePath(scene);
-  if (input.filePath || input.out || input.path) {
-    outputPath = resolveExternalPath(input.filePath || input.out || input.path);
-    if (!input.dryRun) {
-      await fs.mkdir(path.dirname(outputPath), { recursive: true });
-      await fs.writeFile(outputPath, `${JSON.stringify(current, null, 2)}\n`, "utf8");
-    }
-  }
-  const stat = input.dryRun
-    ? null
-    : await fs.stat(outputPath);
-  return {
-    ok: true,
-    scene,
-    path: outputPath,
-    size: stat?.size,
-    sceneData: input.includeScene || input.includeData ? current : undefined
-  };
-}
-
-export async function updateCanvasElement(input = {}) {
-  const { scene, name, id, elementId, selector, snapshot, dryRun, label, ...props } = input;
-  const targetId = id || elementId;
-  if (!targetId && !selector) throw new Error("update_element requires id, elementId, or selector.");
-  return applyCanvasPatch({
-    scene: scene || name,
-    dryRun,
-    snapshot,
-    label: label || "before-update-element",
-    operations: [{
-      op: "update",
-      target: selector || { id: targetId },
-      text: props.text,
-      props
-    }]
-  });
-}
-
-export async function deleteCanvasElement(input = {}) {
-  const target = input.selector || (input.ids ? { ids: input.ids } : { id: input.id || input.elementId });
-  if (!target.id && !target.ids && !target.all && !target.type && !target.textIncludes) {
-    throw new Error("delete_element requires id, ids, or selector.");
-  }
-  return applyCanvasPatch({
-    scene: input.scene || input.name,
-    dryRun: input.dryRun,
-    snapshot: input.snapshot,
-    label: input.label || "before-delete-element",
-    operations: [{ op: "delete", target }]
-  });
-}
-
-export async function groupCanvasElements(input = {}) {
-  const ids = input.elementIds || input.ids;
-  const target = input.selector || (ids ? { ids } : undefined);
-  return applyCanvasPatch({
-    scene: input.scene || input.name,
-    dryRun: input.dryRun,
-    snapshot: input.snapshot,
-    label: input.label || "before-group-elements",
-    operations: [{
-      op: "group",
-      target,
-      groupId: input.groupId
-    }]
-  });
-}
-
-export async function ungroupCanvasElements(input = {}) {
-  const target = input.selector || (input.groupId ? { groupId: input.groupId } : undefined);
-  return applyCanvasPatch({
-    scene: input.scene || input.name,
-    dryRun: input.dryRun,
-    snapshot: input.snapshot,
-    label: input.label || "before-ungroup-elements",
-    operations: [{
-      op: "ungroup",
-      target,
-      groupId: input.groupId
-    }]
-  });
-}
-
-export async function alignCanvasElements(input = {}) {
-  const scene = normalizeSceneName(input.scene || input.name);
-  if (!input.dryRun) await materializeLiveScene(scene, input);
-  const current = await readScene(scene);
-  const selector = input.selector || (input.elementIds || input.ids ? { ids: input.elementIds || input.ids } : null);
-  if (!selector) throw new Error("align_elements requires elementIds, ids, or selector.");
-  const selected = selectCanvasElements(current, { selector });
-  if (selected.length < 2) throw new Error("align_elements needs at least 2 matched elements.");
-  const alignment = input.alignment || "left";
-  const bounds = selected.map(elementBounds);
-  const centers = selected.map(elementCenterForArrange);
-  const target = {
-    left: Math.min(...bounds.map((item) => item.x)),
-    right: Math.max(...bounds.map((item) => item.right)),
-    top: Math.min(...bounds.map((item) => item.y)),
-    bottom: Math.max(...bounds.map((item) => item.bottom)),
-    center: centers.reduce((sum, item) => sum + item.x, 0) / centers.length,
-    middle: centers.reduce((sum, item) => sum + item.y, 0) / centers.length
-  };
-  const snapshot = input.snapshot === false ? null : await createSnapshot(scene, {
-    label: input.label || "before-align-elements"
-  });
-  for (const element of selected) {
-    const itemBounds = elementBounds(element);
-    if (alignment === "left") element.x = target.left;
-    if (alignment === "right") element.x = target.right - itemBounds.width;
-    if (alignment === "center") element.x = target.center - itemBounds.width / 2;
-    if (alignment === "top") element.y = target.top;
-    if (alignment === "bottom") element.y = target.bottom - itemBounds.height;
-    if (alignment === "middle") element.y = target.middle - itemBounds.height / 2;
-    touchElement(element);
-  }
-  if (!input.dryRun) await writeScene(scene, current);
-  if (!input.dryRun) await pushLiveScene(scene, current, input);
-  return {
-    ok: true,
-    scene,
-    alignment,
-    matched: selected.length,
-    snapshot,
-    elements: selected.map(compactElement),
-    context: compactSummary(current, scene, input)
-  };
-}
-
-export async function distributeCanvasElements(input = {}) {
-  const scene = normalizeSceneName(input.scene || input.name);
-  if (!input.dryRun) await materializeLiveScene(scene, input);
-  const current = await readScene(scene);
-  const selector = input.selector || (input.elementIds || input.ids ? { ids: input.elementIds || input.ids } : null);
-  if (!selector) throw new Error("distribute_elements requires elementIds, ids, or selector.");
-  const selected = selectCanvasElements(current, { selector });
-  if (selected.length < 3) throw new Error("distribute_elements needs at least 3 matched elements.");
-  const direction = input.direction || "horizontal";
-  const axis = direction === "vertical" ? "y" : "x";
-  const size = direction === "vertical" ? "height" : "width";
-  const sorted = [...selected].sort((a, b) => elementBounds(a)[axis] - elementBounds(b)[axis]);
-  const sortedBounds = sorted.map(elementBounds);
-  const start = sortedBounds[0][axis];
-  const end = sortedBounds.at(-1)[axis] + sortedBounds.at(-1)[size];
-  const totalSize = sortedBounds.reduce((sum, item) => sum + item[size], 0);
-  const gap = (end - start - totalSize) / (sorted.length - 1);
-  const snapshot = input.snapshot === false ? null : await createSnapshot(scene, {
-    label: input.label || "before-distribute-elements"
-  });
-  let cursor = start;
-  for (const element of sorted) {
-    element[axis] = cursor;
-    cursor += elementBounds(element)[size] + gap;
-    touchElement(element);
-  }
-  if (!input.dryRun) await writeScene(scene, current);
-  if (!input.dryRun) await pushLiveScene(scene, current, input);
-  return {
-    ok: true,
-    scene,
-    direction,
-    matched: sorted.length,
-    gap: roundNumber(gap),
-    snapshot,
-    elements: sorted.map(compactElement),
-    context: compactSummary(current, scene, input)
-  };
-}
-
-export async function describeCanvasScene(input = {}) {
-  const scene = normalizeSceneName(input.scene || input.name);
-  const current = await readCanvasScene(scene, input);
-  return {
-    ok: true,
-    scene,
-    source: current.source,
-    description: describeSceneText(current.scene, scene, { ...input, source: current.source }),
-    context: compactSummary(current.scene, scene, { ...input, source: current.source, live: current.live })
   };
 }
 
@@ -1233,173 +899,18 @@ export async function restoreCanvasSnapshot(input = {}) {
       }
     : await restoreSnapshot(scene, reference);
   const current = input.dryRun ? (await readSnapshotScene(scene, reference)).scene : await readScene(scene);
-  if (!input.dryRun) await pushLiveScene(scene, current, input);
+  let preview;
+  if (!input.dryRun) {
+    await pushLiveScene(scene, current, input);
+    preview = await refreshScenePreview(scene, input);
+  }
   return {
     ok: true,
     scene,
     beforeSnapshot,
     restored,
+    preview,
     context: compactSummary(current, scene, input)
-  };
-}
-
-export async function clearCanvas(input = {}) {
-  const scene = normalizeSceneName(input.scene || input.name);
-  const currentRead = await readCanvasScene(scene, input);
-  const current = currentRead.scene;
-  const elements = activeElements(current);
-  const snapshot = input.snapshot === false ? null : await createSnapshot(scene, {
-    label: input.label || "before-mcp-clear"
-  });
-  for (const element of elements) {
-    element.isDeleted = true;
-    touchElement(element);
-  }
-  current.appState = {
-    ...(current.appState || {}),
-    codex: {
-      ...(current.appState?.codex || {}),
-      clearedAt: new Date().toISOString()
-    }
-  };
-  if (!input.dryRun) await writeScene(scene, current);
-  if (!input.dryRun) await pushLiveScene(scene, current, input);
-  return {
-    ok: true,
-    scene,
-    source: currentRead.source,
-    cleared: elements.length,
-    snapshot,
-    context: compactSummary(current, scene, { ...input, source: "file" })
-  };
-}
-
-export async function duplicateCanvasElements(input = {}) {
-  const scene = normalizeSceneName(input.scene || input.name);
-  if (!input.dryRun) await materializeLiveScene(scene, input);
-  const current = await readScene(scene);
-  const selected = selectCanvasElements(current, input);
-  if (!selected.length) {
-    throw new Error("duplicate_elements did not match any active elements.");
-  }
-  const snapshot = input.snapshot === false ? null : await createSnapshot(scene, {
-    label: input.label || "before-mcp-duplicate"
-  });
-  const duplicates = cloneElementsForDuplicate(selected, input);
-  current.elements.push(...duplicates);
-  if (!input.dryRun) await writeScene(scene, current);
-  if (!input.dryRun) await pushLiveScene(scene, current, input);
-  return {
-    ok: true,
-    scene,
-    duplicated: duplicates.length,
-    snapshot,
-    elements: duplicates.map(compactElement),
-    context: compactSummary(current, scene, input)
-  };
-}
-
-export async function setElementsLocked(input = {}) {
-  const scene = normalizeSceneName(input.scene || input.name);
-  if (!input.dryRun) await materializeLiveScene(scene, input);
-  const current = await readScene(scene);
-  const selected = selectCanvasElements(current, input);
-  if (!selected.length) {
-    throw new Error("lock/unlock did not match any active elements.");
-  }
-  const locked = input.locked !== false;
-  const snapshot = input.snapshot === false ? null : await createSnapshot(scene, {
-    label: input.label || (locked ? "before-mcp-lock" : "before-mcp-unlock")
-  });
-  for (const element of selected) {
-    element.locked = locked;
-    touchElement(element);
-  }
-  if (!input.dryRun) await writeScene(scene, current);
-  if (!input.dryRun) await pushLiveScene(scene, current, input);
-  return {
-    ok: true,
-    scene,
-    locked,
-    matched: selected.length,
-    snapshot,
-    elements: selected.map(compactElement)
-  };
-}
-
-export async function arrangeCanvas(input = {}) {
-  const scene = normalizeSceneName(input.scene || input.name);
-  if (!input.dryRun) await materializeLiveScene(scene, input);
-  const mode = input.mode || "polish";
-  const operation = mode === "layout" ? layoutSceneFile : polishSceneFile;
-  const result = await operation(scene, input.plan || input, {
-    dryRun: Boolean(input.dryRun),
-    snapshot: input.snapshot !== false,
-    label: input.label || `before-mcp-${mode}`
-  });
-  const current = input.dryRun ? result.scene : await readScene(scene);
-  if (!input.dryRun) await pushLiveScene(scene, current, input);
-  return {
-    ok: true,
-    scene,
-    mode,
-    result,
-    context: compactSummary(current, scene, input)
-  };
-}
-
-export async function insertLibraryItem(input = {}) {
-  const scene = normalizeSceneName(input.scene || input.name);
-  const created = !(await sceneExists(scene));
-  if (created) {
-    await writeScene(scene, createBlankScene({ title: input.title }));
-  } else if (!input.dryRun) {
-    await materializeLiveScene(scene, input);
-  }
-  const library = await createLibraryItemElements(input.libraryId || input.library, input.item ?? input.itemSelector ?? 0, {
-    x: input.x,
-    y: input.y,
-    scale: input.scale,
-    prefix: input.prefix
-  });
-  const result = await patchSceneFile(scene, {
-    ops: [{
-      op: "add",
-      elements: library.elements
-    }]
-  }, {
-    snapshot: input.snapshot !== false,
-    label: input.label || "before-mcp-library-insert"
-  });
-  const current = await readScene(scene);
-  await pushLiveScene(scene, current, input);
-  return {
-    ok: true,
-    scene,
-    library: {
-      library: library.library,
-      item: library.item
-    },
-    result,
-    context: compactSummary(current, scene, input)
-  };
-}
-
-export async function searchCanvasLibraries(input = {}) {
-  const query = input.query || input.q || "";
-  return {
-    ok: true,
-    query,
-    matches: await searchLibraryRegistry(query, {
-      limit: Number(input.limit || 8)
-    })
-  };
-}
-
-export async function inspectCanvasLibrary(input = {}) {
-  return {
-    ok: true,
-    library: await inspectRegisteredLibrary(input.libraryId || input.library || input.id)
   };
 }
 
@@ -1416,6 +927,18 @@ export async function exportCanvas(input = {}) {
       format: item,
       baseUrl: input.baseUrl || DEFAULT_WORKBENCH_URL
     }));
+  }
+  if (!input.dryRun && input.notifyWorkbench !== false) {
+    try {
+      await pushLiveScene(scene, await readScene(scene), {
+        ...input,
+        source: input.source || "mcp-export",
+        previewUpdated: true,
+        revision: input.revision || `mcp-export-${Date.now()}`
+      });
+    } catch {
+      // Export already produced the artifact; workbench notification is best-effort.
+    }
   }
   return {
     ok: true,
@@ -1446,44 +969,6 @@ export async function exportCanvasToExcalidrawUrl(input = {}) {
   };
 }
 
-export async function getCanvasScreenshot(input = {}) {
-  const scene = normalizeSceneName(input.scene || input.name);
-  if (input.materializeLive !== false) {
-    await materializeLiveScene(scene, input);
-  }
-  const exportResult = await exportSceneAsset(scene, {
-    format: "png",
-    baseUrl: input.baseUrl || DEFAULT_WORKBENCH_URL
-  });
-  const data = await fs.readFile(exportResult.path, "base64");
-  const text = JSON.stringify({
-    ok: true,
-    scene,
-    screenshot: {
-      path: exportResult.path,
-      url: exportResult.url,
-      size: exportResult.size,
-      mimeType: "image/png",
-      modifiedAt: exportResult.modifiedAt
-    }
-  }, null, 2);
-  return {
-    ok: true,
-    scene,
-    screenshot: {
-      path: exportResult.path,
-      url: exportResult.url,
-      size: exportResult.size,
-      mimeType: "image/png",
-      modifiedAt: exportResult.modifiedAt
-    },
-    _mcpContent: [
-      { type: "text", text },
-      { type: "image", data, mimeType: "image/png" }
-    ]
-  };
-}
-
 export async function reviewCanvas(input = {}) {
   const scene = normalizeSceneName(input.scene || input.name);
   let materializedLive = null;
@@ -1507,6 +992,7 @@ export async function reviewCanvas(input = {}) {
   if (input.includeImage !== false) {
     const exportResult = await exportSceneAsset(scene, {
       format: "png",
+      variant: "review",
       baseUrl: input.baseUrl || DEFAULT_WORKBENCH_URL
     });
     const data = await fs.readFile(exportResult.path, "base64");
@@ -1555,36 +1041,6 @@ export async function reviewCanvas(input = {}) {
   };
 }
 
-export async function setCanvasViewport(input = {}) {
-  const scene = normalizeSceneName(input.scene || input.name);
-  const currentRead = await readCanvasScene(scene, input);
-  const current = currentRead.scene;
-  const nextAppState = {
-    ...(current.appState || {})
-  };
-  if (Number.isFinite(Number(input.scrollX))) nextAppState.scrollX = Number(input.scrollX);
-  if (Number.isFinite(Number(input.scrollY))) nextAppState.scrollY = Number(input.scrollY);
-  if (Number.isFinite(Number(input.zoom))) nextAppState.zoom = { value: Number(input.zoom) };
-  if (input.viewBackgroundColor) nextAppState.viewBackgroundColor = input.viewBackgroundColor;
-  nextAppState.codex = {
-    ...(nextAppState.codex || {}),
-    viewportUpdatedAt: new Date().toISOString()
-  };
-  current.appState = nextAppState;
-  if (!input.dryRun) await writeScene(scene, current);
-  if (!input.dryRun) await pushLiveScene(scene, current, input);
-  return {
-    ok: true,
-    scene,
-    viewport: {
-      scrollX: current.appState.scrollX,
-      scrollY: current.appState.scrollY,
-      zoom: current.appState.zoom,
-      viewBackgroundColor: current.appState.viewBackgroundColor
-    }
-  };
-}
-
 export async function snapshotCanvas(input = {}) {
   const scene = normalizeSceneName(input.scene || input.name);
   if (input.materializeLive !== false) {
@@ -1598,19 +1054,6 @@ export async function snapshotCanvas(input = {}) {
   };
 }
 
-export async function inspectCanvas(input = {}) {
-  const scene = normalizeSceneName(input.scene || input.name);
-  if (input.materializeLive !== false) {
-    await materializeLiveScene(scene, input);
-  }
-  return {
-    ok: true,
-    ...(await inspectSceneFile(scene, {
-      from: input.from || "latest"
-    }))
-  };
-}
-
 export async function listCanvases() {
   return {
     ok: true,
@@ -1618,10 +1061,6 @@ export async function listCanvases() {
     liveScenes: (await fetchLiveStatus()).scenes || [],
     artifactsDir
   };
-}
-
-export async function getLiveCanvasStatus(input = {}) {
-  return fetchLiveStatus(input);
 }
 
 export function getCanvasRuntime() {
@@ -1634,44 +1073,15 @@ export function getCanvasRuntime() {
 }
 
 export const canvasTools = {
-  read_me: (input) => readDiagramGuide({ ...input, topic: input.topic || "all" }),
   create_view: createCanvasView,
-  describe_scene: describeCanvasScene,
   create_from_mermaid: createCanvasFromMermaid,
-  batch_create_elements: batchCreateElements,
-  update_element: updateCanvasElement,
-  delete_element: deleteCanvasElement,
-  export_scene: exportCanvasSceneFile,
-  import_scene: importCanvasScene,
-  export_to_image: exportCanvas,
   export_to_excalidraw_url: exportCanvasToExcalidrawUrl,
-  group_elements: groupCanvasElements,
-  ungroup_elements: ungroupCanvasElements,
-  align_elements: alignCanvasElements,
-  distribute_elements: distributeCanvasElements,
-  snapshot_scene: snapshotCanvas,
   restore_snapshot: restoreCanvasSnapshot,
   open_or_create_canvas: openOrCreateCanvas,
   get_canvas_context: getCanvasContext,
-  query_elements: queryCanvasElements,
-  get_element: getCanvasElement,
   apply_canvas_patch: applyCanvasPatch,
-  clear_canvas: clearCanvas,
-  duplicate_elements: duplicateCanvasElements,
-  lock_elements: (input) => setElementsLocked({ ...input, locked: true }),
-  unlock_elements: (input) => setElementsLocked({ ...input, locked: false }),
-  arrange_canvas: arrangeCanvas,
-  insert_library_item: insertLibraryItem,
-  search_libraries: searchCanvasLibraries,
-  inspect_library: inspectCanvasLibrary,
   export_canvas: exportCanvas,
-  get_canvas_screenshot: getCanvasScreenshot,
   review_canvas: reviewCanvas,
-  set_viewport: setCanvasViewport,
   snapshot_canvas: snapshotCanvas,
-  inspect_canvas: inspectCanvas,
-  list_canvases: listCanvases,
-  get_live_canvas_status: getLiveCanvasStatus,
-  get_runtime_config: getCanvasRuntime,
   read_diagram_guide: readDiagramGuide
 };

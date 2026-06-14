@@ -4,41 +4,50 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { deleteScene, readScene } from "../server/scene-workspace.mjs";
 import { startServer } from "../server/server.mjs";
 
-const scene = "smoke-mcp-toolkit.excalidraw";
+const scene = "smoke-mcp-workflow.excalidraw";
 const mermaidScene = "smoke-mcp-mermaid.excalidraw";
-const importScene = "smoke-mcp-import.excalidraw";
 const requiredTools = [
-  "read_me",
+  "read_diagram_guide",
+  "open_or_create_canvas",
+  "get_canvas_context",
   "create_view",
+  "apply_canvas_patch",
+  "review_canvas",
+  "snapshot_canvas",
+  "restore_snapshot",
+  "export_canvas",
+  "export_to_excalidraw_url",
+  "create_from_mermaid"
+];
+const removedMcpTools = [
+  "read_me",
   "describe_scene",
-  "create_from_mermaid",
   "batch_create_elements",
   "update_element",
   "delete_element",
-  "export_scene",
-  "import_scene",
-  "export_to_image",
-  "export_to_excalidraw_url",
-  "snapshot_scene",
   "group_elements",
   "ungroup_elements",
   "align_elements",
   "distribute_elements",
-  "restore_snapshot",
-  "open_or_create_canvas",
-  "get_live_canvas_status",
-  "get_canvas_context",
-  "get_canvas_screenshot",
-  "review_canvas",
-  "read_diagram_guide",
+  "snapshot_scene",
+  "export_scene",
+  "import_scene",
+  "export_to_image",
   "query_elements",
+  "get_element",
   "duplicate_elements",
   "lock_elements",
-  "export_canvas"
+  "unlock_elements",
+  "arrange_canvas",
+  "set_viewport",
+  "get_canvas_screenshot",
+  "get_live_canvas_status",
+  "list_canvases",
+  "get_runtime_config"
 ];
 
 async function cleanup() {
-  for (const name of [scene, mermaidScene, importScene]) {
+  for (const name of [scene, mermaidScene]) {
     try {
       await deleteScene(name);
     } catch {
@@ -49,6 +58,18 @@ async function cleanup() {
     } catch {
       // The workbench server is optional for cleanup.
     }
+  }
+}
+
+function parseToolPayload(result) {
+  return JSON.parse(result.content?.[0]?.text || "{}");
+}
+
+function closeMcpTransport(transport) {
+  try {
+    void transport.close?.();
+  } catch {
+    // The smoke process exits explicitly after cleanup.
   }
 }
 
@@ -76,162 +97,179 @@ async function main() {
     const names = new Set(tools.tools.map((tool) => tool.name));
     const missing = requiredTools.filter((name) => !names.has(name));
     if (missing.length) {
-      throw new Error(`Missing MCP tools: ${missing.join(", ")}`);
+      throw new Error(`Missing public MCP workflow tools: ${missing.join(", ")}`);
+    }
+    const stillListed = removedMcpTools.filter((name) => names.has(name));
+    if (stillListed.length) {
+      throw new Error(`Removed MCP tools are still listed: ${stillListed.join(", ")}`);
     }
 
-    const guide = await client.callTool({ name: "read_diagram_guide", arguments: { topic: "layout" } });
-    if (!guide.content?.[0]?.text?.includes("Readable Excalidraw layout")) {
-      throw new Error("read_diagram_guide did not return the layout guide.");
-    }
-    const readMe = await client.callTool({ name: "read_me", arguments: {} });
-    if (!readMe.content?.[0]?.text?.includes("cameraUpdate")) {
-      throw new Error("read_me did not return the compatibility drawing guide.");
+    const guide = await client.callTool({ name: "read_diagram_guide", arguments: { topic: "workflow" } });
+    if (!guide.content?.[0]?.text?.includes("intent")) {
+      throw new Error("read_diagram_guide did not return intent-first workflow guidance.");
     }
 
-    const view = await client.callTool({
+    const opened = parseToolPayload(await client.callTool({
+      name: "open_or_create_canvas",
+      arguments: { scene, title: "MCP workflow smoke" }
+    }));
+    if (!opened.browserUrl || !opened.session || !opened.readiness) {
+      throw new Error("open_or_create_canvas did not return live session metadata.");
+    }
+
+    const view = parseToolPayload(await client.callTool({
       name: "create_view",
       arguments: {
         scene,
-        title: "MCP toolkit smoke",
+        title: "MCP workflow smoke",
         reveal: true,
         revealDelayMs: 1,
         revealChunkSize: 2,
         elements: [
-          { type: "cameraUpdate", x: 40, y: 40, width: 800, height: 600 },
-          { id: "smoke-title", type: "text", x: 80, y: 80, width: 420, height: 44, text: "MCP toolkit smoke", fontSize: 32 },
-          { id: "smoke-box", type: "rectangle", x: 80, y: 160, width: 320, height: 110, backgroundColor: "#e7f5ff", customData: { codexRole: "section" } },
-          { id: "smoke-label", type: "text", x: 108, y: 198, width: 250, height: 32, text: "Canvas-aware tools", fontSize: 22 }
+          { type: "cameraUpdate", x: 40, y: 40, width: 900, height: 620 },
+          { id: "smoke-title", type: "text", x: 80, y: 80, width: 480, height: 44, text: "MCP workflow smoke", fontSize: 32 },
+          { id: "smoke-board", type: "rectangle", x: 80, y: 160, width: 420, height: 140, backgroundColor: "#e7f5ff", customData: { codexRole: "focus" } },
+          { id: "smoke-label", type: "text", x: 110, y: 205, width: 340, height: 32, text: "Intent-first public tools", fontSize: 22 }
         ]
       }
-    });
-    const viewPayload = JSON.parse(view.content?.[0]?.text || "{}");
-    if (!viewPayload.checkpointId) {
+    }));
+    if (!view.checkpointId) {
       throw new Error("create_view did not return a checkpoint.");
     }
-    if (!viewPayload.reveal?.enabled || viewPayload.reveal.stages < 2) {
-      throw new Error("create_view did not run progressive reveal stages.");
+    if (!view.reveal?.enabled || view.reveal.stages < 2) {
+      throw new Error("create_view did not run staged reveal.");
+    }
+    if (view.preview !== undefined) {
+      throw new Error(`create_view refreshed a preview during a stage write: ${JSON.stringify(view.preview)}`);
     }
     const createdScene = await readScene(scene);
     if (!createdScene.appState?.codex?.finalViewport || !createdScene.appState?.zoom?.value) {
       throw new Error("create_view did not translate cameraUpdate into viewport appState.");
     }
 
-    await client.callTool({
-      name: "batch_create_elements",
+    const context = parseToolPayload(await client.callTool({ name: "get_canvas_context", arguments: { scene } }));
+    if (context.source !== "live" || !JSON.stringify(context).includes("Intent-first public tools")) {
+      throw new Error("get_canvas_context did not read the live public workflow scene.");
+    }
+
+    await client.callTool({ name: "snapshot_canvas", arguments: { scene, label: "before-public-patch" } });
+    const patch = parseToolPayload(await client.callTool({
+      name: "apply_canvas_patch",
       arguments: {
         scene,
-        elements: [
-          { id: "smoke-step-a", type: "rectangle", x: 500, y: 160, width: 180, height: 80, text: "Read" },
-          { id: "smoke-step-b", type: "rectangle", x: 750, y: 160, width: 180, height: 80, text: "Patch" },
-          { id: "smoke-step-c", type: "rectangle", x: 1000, y: 160, width: 180, height: 80, text: "Review" },
+        operations: [
           {
-            id: "smoke-arrow-ab",
-            type: "arrow",
-            startElementId: "smoke-step-a",
-            endElementId: "smoke-step-b",
-            text: "then"
+            op: "add",
+            elements: [
+              { id: "smoke-note", type: "text", x: 80, y: 350, width: 560, height: 32, text: "Semantic patch keeps the workflow small.", fontSize: 22 }
+            ]
           }
         ]
       }
-    });
-    await client.callTool({ name: "update_element", arguments: { scene, id: "smoke-step-b", text: "Patch safely" } });
-    await client.callTool({
-      name: "align_elements",
-      arguments: { scene, elementIds: ["smoke-step-a", "smoke-step-b", "smoke-step-c"], alignment: "middle" }
-    });
-    await client.callTool({
-      name: "distribute_elements",
-      arguments: { scene, elementIds: ["smoke-step-a", "smoke-step-b", "smoke-step-c"], direction: "horizontal" }
-    });
-
-    const query = await client.callTool({ name: "query_elements", arguments: { scene, selector: { role: "section" } } });
-    if (!query.content?.[0]?.text?.includes("smoke-box")) {
-      throw new Error("query_elements did not find the section element.");
+    }));
+    if (!JSON.stringify(patch).includes("Semantic patch keeps the workflow small")) {
+      throw new Error("apply_canvas_patch did not update the canvas context.");
     }
-    const description = await client.callTool({ name: "describe_scene", arguments: { scene } });
-    if (!description.content?.[0]?.text?.includes("Patch safely")) {
-      throw new Error("describe_scene did not include updated element text.");
+    if (patch.preview !== undefined) {
+      throw new Error(`apply_canvas_patch refreshed a preview during a stage write: ${JSON.stringify(patch.preview)}`);
     }
 
-    await client.callTool({ name: "duplicate_elements", arguments: { scene, selector: { id: "smoke-box" }, dx: 380, dy: 0 } });
-    await client.callTool({ name: "lock_elements", arguments: { scene, selector: { textIncludes: "Canvas-aware" } } });
-    await client.callTool({ name: "snapshot_scene", arguments: { scene, label: "compat-snapshot" } });
-    await client.callTool({ name: "restore_snapshot", arguments: { scene, checkpointId: viewPayload.checkpointId } });
-
-    const context = await client.callTool({ name: "get_canvas_context", arguments: { scene } });
-    if (!context.content?.[0]?.text?.includes("Canvas-aware tools")) {
-      throw new Error("get_canvas_context did not include smoke label text.");
-    }
     const review = await client.callTool({ name: "review_canvas", arguments: { scene } });
-    const reviewPayload = JSON.parse(review.content?.[0]?.text || "{}");
+    const reviewPayload = parseToolPayload(review);
     if (!reviewPayload.reviewProtocol?.length || !reviewPayload.screenshot?.size) {
       throw new Error("review_canvas did not return a complete review packet.");
+    }
+    if (!reviewPayload.screenshot?.path?.includes(".review.png")) {
+      throw new Error(`review_canvas should use a temporary review image: ${JSON.stringify(reviewPayload.screenshot)}`);
     }
     if (!review.content?.some((item) => item.type === "image" && item.mimeType === "image/png")) {
       throw new Error("review_canvas did not return PNG image content.");
     }
+    const reviewIssues = reviewPayload.qa?.issues || reviewPayload.review?.qa?.issues || [];
+    const falseTextOverlap = reviewIssues.find((issue) =>
+      issue.type === "possible-overlap" &&
+      (issue.elementIds || []).includes("smoke-board") &&
+      (issue.elementIds || []).includes("smoke-label")
+    );
+    if (falseTextOverlap) {
+      throw new Error("review_canvas reported a false overlap for text placed inside a node.");
+    }
 
-    await client.callTool({
+    const pseudoPatch = await client.callTool({
+      name: "apply_canvas_patch",
+      arguments: {
+        scene,
+        dryRun: true,
+        operations: [
+          { op: "add", elements: [{ type: "cameraUpdate", x: 0, y: 0, width: 100, height: 100 }] }
+        ]
+      }
+    });
+    if (!pseudoPatch.isError || !pseudoPatch.content?.[0]?.text?.includes("Pseudo element type")) {
+      throw new Error("apply_canvas_patch did not reject create_view pseudo-elements.");
+    }
+
+    const restore = parseToolPayload(await client.callTool({ name: "restore_snapshot", arguments: { scene, checkpointId: view.checkpointId } }));
+    if (restore.preview !== undefined) {
+      throw new Error(`restore_snapshot refreshed a preview during a stage write: ${JSON.stringify(restore.preview)}`);
+    }
+    const restored = parseToolPayload(await client.callTool({ name: "get_canvas_context", arguments: { scene } }));
+    if (JSON.stringify(restored).includes("Semantic patch keeps the workflow small")) {
+      throw new Error("restore_snapshot did not restore the create_view checkpoint.");
+    }
+
+    const mermaid = parseToolPayload(await client.callTool({
       name: "create_from_mermaid",
       arguments: {
         scene: mermaidScene,
         mermaidDiagram: "flowchart LR\n  A[Prompt] --> B[Canvas]\n  B --> C[Preview]",
         fontSize: 22
       }
-    });
-    const mermaidContext = await client.callTool({ name: "describe_scene", arguments: { scene: mermaidScene } });
-    if (!mermaidContext.content?.[0]?.text?.includes("Prompt")) {
+    }));
+    if (mermaid.preview !== undefined) {
+      throw new Error(`create_from_mermaid refreshed a preview before export: ${JSON.stringify(mermaid.preview)}`);
+    }
+    const mermaidContext = parseToolPayload(await client.callTool({ name: "get_canvas_context", arguments: { scene: mermaidScene } }));
+    if (!JSON.stringify(mermaidContext).includes("Prompt")) {
       throw new Error("create_from_mermaid did not create readable scene content.");
     }
 
-    const exportedScene = await client.callTool({
-      name: "export_scene",
-      arguments: { scene: mermaidScene, includeScene: true }
-    });
-    const exportedPayload = JSON.parse(exportedScene.content?.[0]?.text || "{}");
-    if (!exportedPayload.sceneData?.elements?.length) {
-      throw new Error("export_scene did not return scene data.");
+    const imageExport = parseToolPayload(await client.callTool({
+      name: "export_canvas",
+      arguments: { scene: mermaidScene, format: "png" }
+    }));
+    if (!imageExport.exports?.[0]?.size) {
+      throw new Error("export_canvas did not produce a non-empty PNG.");
     }
-    await client.callTool({
-      name: "import_scene",
-      arguments: {
-        scene: importScene,
-        sceneData: exportedPayload.sceneData,
-        mode: "replace"
-      }
-    });
-    const imageExport = await client.callTool({
-      name: "export_to_image",
-      arguments: { scene: importScene, format: "png" }
-    });
-    const imagePayload = JSON.parse(imageExport.content?.[0]?.text || "{}");
-    if (!imagePayload.exports?.[0]?.size) {
-      throw new Error("export_to_image did not produce a non-empty PNG.");
-    }
-    const shareDryRun = await client.callTool({
+
+    const shareDryRun = parseToolPayload(await client.callTool({
       name: "export_to_excalidraw_url",
-      arguments: { scene: importScene, dryRun: true }
-    });
-    const sharePayload = JSON.parse(shareDryRun.content?.[0]?.text || "{}");
-    if (!sharePayload.share?.dryRun || !sharePayload.share?.payloadSize || !sharePayload.share?.payloadSha256) {
+      arguments: { scene: mermaidScene, dryRun: true }
+    }));
+    if (!shareDryRun.share?.dryRun || !shareDryRun.share?.payloadSize || !shareDryRun.share?.payloadSha256) {
       throw new Error("export_to_excalidraw_url dry run did not prepare an encrypted payload.");
     }
 
     console.log(JSON.stringify({
       ok: true,
       toolCount: tools.tools.length,
-      verified: requiredTools
+      verified: requiredTools,
+      removedFromPublicSurface: removedMcpTools
     }, null, 2));
   } finally {
-    await client.close();
-    if (!renderServer.reused) {
-      await renderServer.close();
-    }
+    closeMcpTransport(transport);
     await cleanup();
+    if (!renderServer.reused) {
+      void renderServer.close();
+    }
   }
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exit(1);
-});
+main()
+  .then(() => {
+    process.exit(0);
+  })
+  .catch((error) => {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  });

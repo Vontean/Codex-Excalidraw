@@ -819,29 +819,22 @@ async function commandDoctor(args) {
 
   const mcpTools = listMcpTools();
   const requiredMcpTools = [
-    "read_me",
-    "create_view",
-    "describe_scene",
-    "create_from_mermaid",
-    "batch_create_elements",
-    "update_element",
-    "delete_element",
-    "export_scene",
-    "import_scene",
-    "export_to_image",
-    "export_to_excalidraw_url",
-    "snapshot_scene",
-    "restore_snapshot",
-    "get_live_canvas_status",
-    "get_canvas_screenshot",
-    "review_canvas",
     "read_diagram_guide",
-    "apply_canvas_patch"
+    "open_or_create_canvas",
+    "get_canvas_context",
+    "create_view",
+    "apply_canvas_patch",
+    "review_canvas",
+    "snapshot_canvas",
+    "restore_snapshot",
+    "export_canvas",
+    "export_to_excalidraw_url",
+    "create_from_mermaid",
   ];
   const missingMcpTools = requiredMcpTools.filter(
     (name) => !mcpTools.some((tool) => tool.name === name)
   );
-  addCheck("mcp-tools", mcpTools.length >= 35 && missingMcpTools.length === 0, {
+  addCheck("mcp-workflow-tools", missingMcpTools.length === 0, {
     toolCount: mcpTools.length,
     required: requiredMcpTools,
     missing: missingMcpTools

@@ -6,19 +6,73 @@ import { deleteScene, writeScene } from "../server/scene-workspace.mjs";
 import { startServer } from "../server/server.mjs";
 
 const scene = "smoke-live-bridge.excalidraw";
+const missingFirstScene = "smoke-live-missing-first.excalidraw";
 const baseUrl = "http://127.0.0.1:3000/";
 
 async function cleanup() {
-  try {
-    await fetch(`${baseUrl}api/live-scenes/${scene}`, { method: "DELETE" });
-  } catch {
-    // Ignore cleanup when the server is not reachable.
+  for (const name of [scene, missingFirstScene]) {
+    try {
+      await fetch(`${baseUrl}api/live-scenes/${name}`, { method: "DELETE" });
+    } catch {
+      // Ignore cleanup when the server is not reachable.
+    }
+    try {
+      await deleteScene(name);
+    } catch {
+      // Ignore missing smoke artifacts.
+    }
   }
-  try {
-    await deleteScene(scene);
-  } catch {
-    // Ignore missing smoke artifacts.
+}
+
+async function waitForBrowserReady(sceneName) {
+  const deadline = Date.now() + 8000;
+  let lastState = null;
+  while (Date.now() < deadline) {
+    const response = await fetch(`${baseUrl}api/live-scenes/${sceneName}/status`);
+    if (response.ok) {
+      const status = await response.json();
+      lastState = status;
+      if (status?.browserReady && status?.subscriberCount > 0) {
+        return status;
+      }
+    }
+    await sleep(150);
   }
+  throw new Error(`Timed out waiting for browser-ready scene subscription: ${JSON.stringify(lastState)}`);
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function closeMcpTransport(transport) {
+  try {
+    void transport.close?.();
+  } catch {
+    // The smoke process exits explicitly after cleanup.
+  }
+}
+
+async function waitForNodeLiveScene() {
+  const deadline = Date.now() + 8000;
+  let lastState = null;
+  while (Date.now() < deadline) {
+    const response = await fetch(`${baseUrl}api/live-scenes/${scene}?includeScene=true`);
+    if (response.ok) {
+      const live = await response.json();
+      lastState = live;
+      if (
+        live?.source === "workbench" &&
+        live?.activeElementCount === 1 &&
+        live?.sceneData?.type === "excalidraw" &&
+        Array.isArray(live.sceneData.elements)
+      ) {
+        return live;
+      }
+    }
+    await sleep(150);
+  }
+  throw new Error(`Timed out waiting for Node live scene payload: ${JSON.stringify(lastState)}`);
 }
 
 function textElement(id, text, x, y) {
@@ -87,13 +141,14 @@ async function main() {
   });
 
   try {
-    await page.goto(`${baseUrl}?scene=${encodeURIComponent(scene)}`, { waitUntil: "networkidle" });
+    await page.goto(`${baseUrl}?scene=${encodeURIComponent(scene)}`, { waitUntil: "domcontentloaded" });
     await page.waitForFunction(async (sceneName) => {
       const response = await fetch(`/api/live-scenes/${sceneName}`);
       if (!response.ok) return false;
       const live = await response.json();
       return live?.source === "workbench" && live?.activeElementCount === 1;
     }, scene, { timeout: 8000 });
+    await waitForNodeLiveScene();
 
     await client.connect(transport);
     const before = await client.callTool({ name: "get_canvas_context", arguments: { scene } });
@@ -102,7 +157,7 @@ async function main() {
       throw new Error(`Expected MCP to read live canvas, got ${beforeJson.source}`);
     }
 
-    await client.callTool({
+    const patchResult = JSON.parse((await client.callTool({
       name: "apply_canvas_patch",
       arguments: {
         scene,
@@ -116,19 +171,76 @@ async function main() {
           }
         ]
       }
-    });
+    })).content[0].text);
+    if (patchResult.preview !== undefined) {
+      throw new Error(`MCP patch refreshed a preview during a stage write: ${JSON.stringify(patchResult.preview)}`);
+    }
 
-    await page.waitForFunction(() => document.body.innerText.includes("Applied live update from mcp"), null, { timeout: 8000 });
+    await page.waitForFunction(() => document.body.innerText.includes("Canvas updated from Codex"), null, { timeout: 8000 });
+    const previewBeforeExport = await page.evaluate((sceneName) => {
+      const pngName = sceneName.replace(/\.excalidraw$/, ".png");
+      return Array.from(document.querySelectorAll(".gallery-preview img")).some((image) =>
+        decodeURIComponent(image.getAttribute("src") || "").includes(pngName)
+      );
+    }, scene);
+    if (previewBeforeExport) {
+      throw new Error("Gallery preview appeared before final export.");
+    }
+
+    const patchExport = JSON.parse((await client.callTool({
+      name: "export_canvas",
+      arguments: { scene, format: "png" }
+    })).content[0].text);
+    if (!patchExport.exports?.[0]?.size) {
+      throw new Error(`export_canvas did not create a final PNG preview: ${JSON.stringify(patchExport)}`);
+    }
+    await page.waitForFunction(() => document.body.innerText.includes("Preview updated"), null, { timeout: 8000 });
+    await page.waitForFunction((sceneName) => {
+      const pngName = sceneName.replace(/\.excalidraw$/, ".png");
+      return Array.from(document.querySelectorAll(".gallery-preview img")).some((image) =>
+        decodeURIComponent(image.getAttribute("src") || "").includes(pngName)
+      );
+    }, scene, { timeout: 8000 });
 
     const liveResponse = await fetch(`${baseUrl}api/live-scenes/${scene}?includeScene=true`);
     const live = await liveResponse.json();
     const after = await client.callTool({ name: "get_canvas_context", arguments: { scene } });
     const afterJson = JSON.parse(after.content[0].text);
-    if (live.source !== "mcp" || live.activeElementCount !== 3) {
+    if (!["mcp", "mcp-export"].includes(live.source) || live.activeElementCount !== 3) {
       throw new Error(`Unexpected live state after MCP patch: ${JSON.stringify({ source: live.source, activeElementCount: live.activeElementCount })}`);
     }
     if (afterJson.source !== "live" || !after.content[0].text.includes("MCP pushed update")) {
       throw new Error("MCP did not read back the pushed live update.");
+    }
+
+    await page.goto(`${baseUrl}?scene=${encodeURIComponent(missingFirstScene)}`, { waitUntil: "domcontentloaded" });
+    await waitForBrowserReady(missingFirstScene);
+    const openedMissing = JSON.parse((await client.callTool({
+      name: "open_or_create_canvas",
+      arguments: { scene: missingFirstScene, title: "Missing first scene", waitForSubscriberMs: 2000 }
+    })).content[0].text);
+    if (!openedMissing.readiness?.browserReady || openedMissing.readiness?.subscriberCount < 1) {
+      throw new Error(`open_or_create_canvas did not observe browser readiness: ${JSON.stringify(openedMissing.readiness)}`);
+    }
+    const missingView = JSON.parse((await client.callTool({
+      name: "create_view",
+      arguments: {
+        scene: missingFirstScene,
+        title: "Missing first scene",
+        elements: [
+          { type: "cameraUpdate", x: 40, y: 40, width: 700, height: 420 },
+          { id: "missing-first-title", type: "text", x: 80, y: 80, width: 520, height: 44, text: "First live write after browser-ready", fontSize: 28 }
+        ]
+      }
+    })).content[0].text);
+    if (missingView.preview !== undefined) {
+      throw new Error(`create_view refreshed a preview during a stage write: ${JSON.stringify(missingView.preview)}`);
+    }
+    await page.waitForFunction(() => document.body.innerText.includes("Canvas updated from Codex"), null, { timeout: 8000 });
+    const missingLiveResponse = await fetch(`${baseUrl}api/live-scenes/${missingFirstScene}?includeScene=true`);
+    const missingLive = await missingLiveResponse.json();
+    if (missingLive.source !== "mcp" || missingLive.activeElementCount !== 1) {
+      throw new Error(`Unexpected missing-first live state: ${JSON.stringify({ source: missingLive.source, activeElementCount: missingLive.activeElementCount })}`);
     }
 
     console.log(JSON.stringify({
@@ -136,19 +248,26 @@ async function main() {
       workbenchToLive: true,
       mcpReadLive: true,
       mcpToWorkbench: true,
+      stageWritesSkippedPreview: true,
+      galleryPreviewUpdatedAfterExport: true,
+      browserReadyBeforeFirstWrite: true,
       activeElementCount: live.activeElementCount
     }, null, 2));
   } finally {
-    await client.close().catch(() => undefined);
+    closeMcpTransport(transport);
     await browser.close().catch(() => undefined);
     await cleanup();
     if (!server.reused) {
-      await server.close();
+      void server.close();
     }
   }
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exit(1);
-});
+main()
+  .then(() => {
+    process.exit(0);
+  })
+  .catch((error) => {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  });

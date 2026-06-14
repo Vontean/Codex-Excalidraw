@@ -7,11 +7,11 @@ metadata:
 
 # Excalidraw Diagram
 
-Use this skill as a canvas-aware Excalidraw workflow. The main path is MCP-first: Codex reads the current canvas, applies semantic batches of edits, reviews the resulting canvas, and keeps deterministic file/service work in the CLI.
+Use this skill as an intent-first, live-first Excalidraw workflow. Excalidraw is a shared canvas: read it, draw in meaningful increments, review visually, and continue from user edits.
 
 ## Runtime Discovery
 
-Start every new project/session by discovering the installed runtime:
+Start a truly new or uncertain project/session by discovering the installed runtime:
 
 ```sh
 excalidraw-codex config --json
@@ -29,109 +29,119 @@ node <installedFrom>/bin/excalidraw-codex.mjs mcp-config --json
 
 If neither exists, ask the user to run the repository setup script.
 
+## Fast Workbench Entry
+
+When the user is already working in the In-App Browser, or the current conversation includes an In-App Browser URL for the target scene, use this lighter entry path before doing heavier setup:
+
+1. Create or load the scene with `open_or_create_canvas` and `waitForSubscriberMs` around `800-1500`.
+2. If `readiness.browserReady` is true, treat the workbench as already open and bound to the scene. Do not initialize Browser automation, navigate, reload, or run `doctor` just to be safe.
+3. If `readiness.browserReady` is false, start or reuse the local workbench with `excalidraw-codex serve`, then open the returned `browserUrl` in the In-App Browser. After navigation, call `open_or_create_canvas` again with `waitForSubscriberMs` and wait for `browserReady` before the first visible write.
+4. Run `excalidraw-codex doctor --json` only when a tool is missing, the server cannot be reached, port `3000` is occupied by an incompatible process, export fails, or a live write does not appear in the workbench.
+5. Use `config --json` when you need paths, artifact locations, or the default font and they are not already known for the session. Use `mcp-config --json` when configuring or debugging MCP, not as mandatory ceremony for every small drawing.
+
 ## Roles
 
-- **Codex / LLM** decides intent, visual metaphor, language, hierarchy, copy density, shape choice, library choice, and what to change after seeing the canvas.
-- **MCP canvas bridge** is Codex's eye and hand: read canvas context, snapshot, apply semantic patches, insert library items, inspect changes, and export visual previews.
-- **CLI** handles deterministic work: install/setup, serve/reuse the workbench, configure paths, install/search public libraries, validate files, export assets, and open URLs.
-- **Workbench** is the user's editable canvas at `http://127.0.0.1:3000/`.
+- **Codex / LLM** decides intent, visual model, reading path, language, hierarchy, copy density, shape choice, and what to change after seeing the canvas.
+- **MCP canvas bridge** is Codex's eye and hand for the shared canvas: open/read, draw/update semantically, snapshot/restore, review, and export.
+- **CLI** handles deterministic work: install/setup, serve/reuse the workbench, configure paths, validate files, export assets, install libraries, and open URLs.
+- **Workbench** is the user's editable browser canvas at `http://127.0.0.1:3000/`.
 
-Do not treat MCP as a replacement for every CLI command. Use MCP when the agent needs canvas state. Use CLI when the action is file/service/library plumbing.
+Do not treat MCP as a replacement for every CLI command. Use MCP when the agent needs current canvas state. Use CLI when the action is file, service, or library plumbing.
 
-## Default MCP-First Workflow
+## Intent-First Workflow
 
-1. Discover config and confirm MCP availability:
+1. Discover config and confirm readiness when needed:
    - `excalidraw-codex config --json`
    - `excalidraw-codex mcp-config --json`
-   - `excalidraw-codex doctor --json` when a session is newly attached, a tool is missing, or port `3000` was started by another session. If doctor reports missing server capabilities, restart the shared workbench on `3000` instead of falling back to another port.
-   - If doctor reports stale or missing `build-assets`, run `excalidraw-codex serve` or `npm run build`; do not switch ports to work around a blank or outdated workbench.
-   - If doctor reports a failing `share-payload` check, external Excalidraw URL sharing is not safe to use in that runtime; continue with local `.excalidraw`/PNG/SVG outputs until the runtime is fixed.
-2. Start or reuse the workbench when the user will inspect or edit:
+   - `excalidraw-codex doctor --json` when a session is newly attached, a tool is missing, or port `3000` was started by another session.
+2. Start or reuse the workbench when the user will inspect, steer, co-edit, or review:
    - `excalidraw-codex serve`
-   - Port `3000` is the shared workbench. If it is already serving Excalidraw Codex, reuse it.
-3. Open or create a scene through MCP:
-   - `open_or_create_canvas`
-4. Read the current canvas before editing:
-   - `read_diagram_guide` with `topic: "workflow"` and then the relevant topic (`layout`, `visual-language`, `text`, or `review`).
-   - `get_live_canvas_status` to see whether the browser workbench has an unsaved live draft.
-   - `get_canvas_context`
-   - If the user edited the canvas, also use `snapshot_canvas` and `inspect_canvas`.
-5. Decide the visual expression in natural language before patching:
-   - What should the diagram explain, compare, explore, decide, plan, or prototype?
-   - Which visual organization fits: pipeline, hierarchy, board, map, timeline, swimlane, wireframe, page flow, decision tree, dashboard, or freer whiteboard?
-   - Which shapes/components/libraries best express the idea?
-6. Draw with semantic batches:
-   - Prefer `create_view` for expressive first-pass drawing from a compact element array. Use `cameraUpdate` to frame the workbench view.
-   - Keep `create_view` reveal/progressive mode off by default for speed. Turn `reveal: true` on only for demos, teaching, complex walkthroughs, or when the user explicitly benefits from watching the drawing evolve.
-   - Prefer `batch_create_elements`, `update_element`, `delete_element`, `align_elements`, and `distribute_elements` when following common Excalidraw MCP element-level workflows.
-   - Use `apply_canvas_patch` once per meaningful section, region, flow lane, screen, or cluster.
-   - Avoid one MCP call per primitive. Avoid one giant blind patch for the whole diagram when the canvas is complex.
-   - Use grouped shape + text primitives so the canvas stays readable, editable, and inspectable.
-7. Use libraries only when they improve expression:
-   - `search_libraries`
-   - `inspect_library`
-   - `insert_library_item`
-   - Do not install new libraries unless the user explicitly asks; installation is a CLI task.
-8. Review after meaningful edits:
-   - `review_canvas` when visual review matters. Use it for complex diagrams, low-fidelity UI, dense layouts, or whenever the user is evaluating visual quality. It returns the PNG image plus context, QA notes, and the review checklist in one packet.
-   - `get_canvas_context` for structure and layout issues when a full visual packet is unnecessary.
-   - `get_canvas_screenshot` when you only need the PNG image or want a separate visual check after a small patch.
-   - `export_canvas` or CLI `excalidraw-codex export` for final PNG/SVG assets.
-   - Make at most one automatic targeted repair after a good first pass unless the user asks for more polish.
-9. Return useful outputs:
-   - Editable canvas: `<artifactsDir>/<slug>.excalidraw`
-   - Browser URL: `http://127.0.0.1:3000/?scene=<slug>.excalidraw`
-   - PNG/SVG paths when exported.
+   - Reuse port `3000` when it is already serving Excalidraw Codex.
+   - If `open_or_create_canvas` reports `readiness.browserReady` for the intended scene, skip Browser automation entirely; the workbench is already open.
+3. Open or create the scene:
+   - Use `open_or_create_canvas`.
+   - Return or keep track of the `browserUrl`, `session`, `readiness`, and `baseRevision` when useful.
+   - If also navigating the In-App Browser, create/open the scene first, then navigate to the returned `browserUrl`. Do not navigate to a scene URL before the scene exists. Do not navigate or reload when the user already has the matching scene open and `browserReady` is true.
+   - After browser navigation, call `open_or_create_canvas` again with `waitForSubscriberMs` when the next write must be user-visible; wait until `readiness.browserReady` is true before drawing the first visible stage.
+4. Read before editing:
+   - Use `read_diagram_guide` with `topic: "workflow"` and, when helpful, `visual-strategy`, `live-collaboration`, `layout`, `visual-language`, `text`, or `review`.
+   - Use `get_canvas_context` to read the live canvas/source of truth.
+5. Choose the visual model before choosing shapes:
+   - Sequence/procedure: flow, timeline, recipe, storyboard.
+   - Choice/tradeoff: decision tree, option map, tension field.
+   - System structure: architecture map, layered system, topology, dependency map.
+   - Relationship/concept: concept map, constellation, matrix, annotated landscape.
+   - Evidence/reasoning: evidence board, claim/support map, comparison spread.
+   - Product/interface: UI sketch, screen flow, state map, journey storyboard.
+   - If none fit, use a freeform whiteboard explanation.
+6. Choose the collaboration rhythm from the task:
+   - Use live-first when the user wants to watch, interrupt, steer, teach, explore, or co-edit.
+   - Use fast batch mode for small one-shot requests where the user only wants the final artifact.
+   - In live-first mode, sync the canvas after meaningful, user-visible stages chosen by the LLM from task complexity and visual strategy. Do not force a universal skeleton/region/lane/module sequence.
+   - For complex multi-stage drawings, make each stage a real browser-visible result, such as structure, major groups, relationships, annotations, and polish. Push each completed stage to the workbench before moving to the next stage.
+   - Do not slow down simple tasks or pause after every primitive. A small flowchart can be created in one pass; a complex architecture, product journey, or UI map should be updated at reviewable checkpoints before the final response.
+7. Draw/update with public workflow tools:
+   - `create_view` for expressive first passes or full-view creation. Optional `reveal: true` shows staged HTTP workbench updates; it is not true token streaming.
+   - `apply_canvas_patch` for semantic changes after reading the current canvas.
+   - Use `cameraUpdate`, `delete`, and `restoreCheckpoint` pseudo-elements only inside `create_view`; do not pass them as elements to `apply_canvas_patch`.
+   - Keep stage updates live-only by default; do not refresh the gallery PNG preview while the drawing is still evolving.
+   - Use `refreshPreview: true` only when an intermediate thumbnail is explicitly useful. Prefer `export_canvas` for the final PNG/SVG and gallery preview.
+   - Use `baseRevision` when available so stale writes do not overwrite newer browser edits.
+8. Review and continue:
+   - Use `review_canvas` for non-trivial diagrams, dense layouts, UI sketches, and visual-quality-sensitive work.
+   - For most medium diagrams, review once near the end. `review_canvas` returns a temporary inspection image and should not be treated as the final PNG preview.
+   - If the user edits the canvas, read `get_canvas_context` again and infer intent from the latest live state before continuing.
+   - Make targeted repairs instead of rebuilding the whole scene when the strategy is already right.
+9. Snapshot/export:
+   - Use `snapshot_canvas` before risky changes and `restore_snapshot` after an unsuccessful pass.
+   - Use `export_canvas` or CLI `excalidraw-codex export` for final PNG/SVG assets.
+   - Use `export_to_excalidraw_url` or CLI `share` only when the user explicitly asks for an external share link.
 
-## MCP Tool Use
+## Public MCP Tools
 
-Prefer these tools:
+The MCP server intentionally exposes a small workflow surface:
 
-- `open_or_create_canvas`: create or load the working scene.
-- `read_me`: compatibility guide for mature Excalidraw MCP drawing patterns; read once before `create_view` if starting from element arrays.
-- `create_view`: official-style compact drawing path; supports `cameraUpdate`, `delete`, and `restoreCheckpoint` pseudo-elements, returns a checkpoint, and can optionally reveal stages live in the workbench.
-- `describe_scene`: structured canvas read-back compatible with common Excalidraw MCP workflows.
-- `create_from_mermaid`: convert Mermaid into an editable Excalidraw canvas when the source structure is naturally Mermaid-shaped.
-- `batch_create_elements`: create multiple elements at once; accepts `startElementId` / `endElementId` for bound arrows.
-- `update_element` / `delete_element`: targeted element updates.
-- `group_elements` / `ungroup_elements`: keep related elements movable and editable.
-- `align_elements` / `distribute_elements`: deterministic small layout helpers, used after the LLM chooses the composition.
-- `export_scene` / `import_scene`: move `.excalidraw` JSON or element arrays through the MCP layer when staying inside the canvas workflow is more ergonomic than shelling out.
-- `export_to_image`: MCP-compatible alias for browser-rendered PNG/SVG export.
-- `export_to_excalidraw_url`: explicitly upload an encrypted scene payload to excalidraw.com and return a shareable URL. Use only when the user asks for an external/shareable Excalidraw link; otherwise keep work local.
-- `get_live_canvas_status`: check whether the workbench has an unsaved live draft. MCP reads live canvas state by default when available.
-- `get_canvas_context`: read compact metadata, elements, regions, connections, and layout issues.
-- `get_canvas_screenshot`: return a rendered PNG as MCP image content so the agent can visually review the result.
-- `review_canvas`: preferred visual review packet for non-trivial diagrams; includes context, QA, review principles, and a PNG image. Inspect the image before deciding the canvas is done.
-- `read_diagram_guide`: load reusable drawing guidance for workflow, layout, visual language, text, or review.
-- `query_elements` / `get_element`: inspect specific canvas elements before targeted edits.
-- `apply_canvas_patch`: add/update/delete/group/connect elements in semantic batches.
-- `clear_canvas`: reset a scene while snapshotting first.
-- `duplicate_elements`: duplicate selected groups/elements with an offset.
-- `lock_elements` / `unlock_elements`: protect or release stable regions.
-- `set_viewport`: persist viewport metadata for the workbench.
-- `arrange_canvas`: use deterministic layout/polish helpers sparingly after the semantic design is already clear.
-- `search_libraries` / `inspect_library` / `insert_library_item`: use installed Excalidraw libraries as visual vocabulary.
-- `snapshot_canvas` / `snapshot_scene` / `inspect_canvas`: understand user edits before continuing.
-- `restore_snapshot`: roll back after an unsuccessful drawing pass or continue from a checkpoint.
-- `export_canvas`: render PNG/SVG through the browser path.
-- `list_canvases` / `get_runtime_config`: discover available scenes and runtime paths.
+- `read_diagram_guide`: intent-first guidance and review criteria.
+- `open_or_create_canvas`: start/reuse a workbench scene and return live session metadata.
+- `get_canvas_context`: read compact current canvas state from live draft when available.
+- `create_view`: create a first pass or full view, with optional staged reveal.
+- `apply_canvas_patch`: semantic updates to current canvas.
+- `review_canvas`: screenshot-backed visual review packet.
+- `snapshot_canvas`: checkpoint before risky work.
+- `restore_snapshot`: roll back to a checkpoint.
+- `export_canvas`: local PNG/SVG export through the browser render path.
+- `export_to_excalidraw_url`: explicit external share export.
+- `create_from_mermaid`: optional conversion only when the source is naturally Mermaid-shaped.
+
+Avoid old micro-tool habits such as one tool for each update/delete/group/align/query operation. The public surface is designed to keep context small and push visual judgment back into the LLM.
 
 ## Fallbacks
 
-- Use `create_from_mermaid` or CLI `from-mermaid` for simple conventional flowcharts when editable Excalidraw output is useful but canvas-aware iteration is unnecessary.
-- Use `patch`, `layout`, `polish`, `qa`, and `export` CLI commands when MCP is unavailable.
-- Treat `plan` and `from-brief` as legacy quick-draft helpers only. Do not use them as the default path for expressive product, architecture, or UI diagrams.
+- Use `create_from_mermaid` or CLI `from-mermaid` for simple conventional flowcharts when the source is already Mermaid-shaped.
+- Use `patch`, `layout`, `polish`, `qa`, and `export` CLI commands only when MCP is unavailable or deterministic file work is the better path.
+- Treat `plan` and `from-brief` as legacy quick-draft fallbacks only. Do not use them as the default path for expressive product, architecture, or UI diagrams.
 
 ## Live Canvas Rule
 
 The workbench syncs the current browser canvas to the local service as a live draft. MCP tools prefer that live draft when available, then fall back to the saved `.excalidraw` file.
 
-- Before modifying a scene that may be open in the browser, call `get_live_canvas_status`.
-- If a live draft exists, trust `get_canvas_context` over a raw file read.
+- Open the workbench early when the user wants participation.
+- Ensure the browser is bound to the intended scene before the first live write. `readiness.browserReady` means the workbench has subscribed to that scene.
+- When the user context says the In-App Browser is already at `http://127.0.0.1:3000/?scene=<slug>.excalidraw`, confirm with `open_or_create_canvas(waitForSubscriberMs)` instead of taking over the browser.
+- Trust `get_canvas_context` over raw file reads for scenes that may be open in the browser.
 - Patch/export/snapshot tools materialize the live draft first so unsaved user edits are not lost.
-- After MCP writes a scene, the browser workbench can pick up the new live revision automatically. The user should not need to refresh for normal agent patches.
+- Live writes use service-side revisions. If a conflict appears, read the latest canvas and continue from that state.
+- Browser updates use SSE when available and polling as fallback.
+- For participatory work, push each completed reviewable stage to the browser before describing it as done. Do not wait until the final assistant answer to make the first visible update.
+- Do not update gallery thumbnails during ordinary stage writes. The user is watching the active canvas; refresh the gallery thumbnail when finalizing with `export_canvas` or when explicitly requested.
 - Still return the saved file path in the final answer; live drafts are collaboration state, not the final artifact contract.
+
+## User-Facing Communication
+
+- Keep progress updates product-level and visual: say what is appearing on the canvas or what checkpoint is next.
+- Avoid exposing implementation details such as MCP schemas, SSE, revisions, browser-ready polling, internal tool names, token cost, or compatibility work unless the user specifically asks.
+- When there is a technical limitation that affects the user's experience, explain the impact first and the mechanism only as much as needed.
+- Prefer short updates during drawing. Do not narrate every internal check.
 
 ## External Share Rule
 
@@ -163,16 +173,15 @@ Follow the user's current conversation language for generated canvas text:
 
 ## Diagram Guidance
 
-- Do not reduce Excalidraw to flowcharts. Support architecture exploration, product ideation, low-fidelity prototypes, page maps, data stories, planning maps, and visual explanations.
-- Use sections for boundaries, cards for entities, sticky notes for ideas, phone/web frames for product UI, decision controls for branching, chart components for data stories, and freeform marks only when they clarify.
+- Do not reduce Excalidraw to flowcharts or card grids. Support architecture exploration, product ideation, low-fidelity prototypes, page maps, data stories, planning maps, evidence boards, concept landscapes, and freeform visual explanations.
+- Let rectangles, arrows, lanes, modules, and regions be optional vocabulary, not defaults.
 - Keep text short and purposeful. Use annotations for context instead of stuffing long prose into nodes.
-- Size text by role: title, section heading, node label, annotation.
+- Size text by role: title, area heading, primary label, annotation.
 - Leave generous whitespace. Long labels need wider elements or a different composition, not smaller text squeezed into fixed boxes.
-- Treat deterministic layout/polish as an assistant, not the design authority. Codex should make the visual judgment after reading the canvas.
+- Treat deterministic layout/polish as an assistant, not the design authority.
 - When the user edits the canvas, read the edited scene first and infer their intent before changing direction.
 - For large background zones, do not use bound/centered labels; place a standalone heading at the top-left of the zone.
 - Keep arrow labels short. If the relationship needs a sentence, use a nearby annotation instead of squeezing text onto a short arrow.
-- Route long cross-zone connectors around clear lanes rather than through unrelated cards, frames, or UI screens.
 
 ## Output Contract
 

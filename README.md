@@ -143,17 +143,16 @@ excalidraw-codex mcp
 
 Use `mcp-config` to get the agent config snippet. `mcp` starts the stdio MCP server and is intended to be launched by Codex / Claude Code, not manually kept in a terminal.
 
-MCP tool groups:
+Public MCP workflow tools:
 
-- Direct drawing protocol: `read_me`, `create_view`, `describe_scene`. This borrows the proven Excalidraw MCP pattern of compact element arrays, camera/checkpoint metadata, and canvas read-back.
-- Format compatibility: `create_from_mermaid`, `export_scene`, `import_scene`, `export_to_image`, `export_to_excalidraw_url` keep common Excalidraw MCP workflows available without leaving the MCP canvas loop.
-- Canvas awareness: `get_live_canvas_status`, `get_canvas_context`, `review_canvas`, `get_canvas_screenshot`, `query_elements`, `get_element`.
-- Drawing/editing: `batch_create_elements`, `update_element`, `delete_element`, `group_elements`, `ungroup_elements`, `align_elements`, `distribute_elements`, `apply_canvas_patch`, `clear_canvas`, `duplicate_elements`, `lock_elements`, `unlock_elements`, `set_viewport`.
-- Guidance: `read_diagram_guide` for workflow, layout, visual language, text, review principles, and concrete Excalidraw anti-patterns.
-- Libraries: `search_libraries`, `inspect_library`, `insert_library_item`.
-- Lifecycle: `open_or_create_canvas`, `snapshot_canvas`, `snapshot_scene`, `restore_snapshot`, `inspect_canvas`, `export_canvas`, `list_canvases`, `get_runtime_config`.
+- Guidance: `read_diagram_guide`.
+- Session/read: `open_or_create_canvas`, `get_canvas_context`.
+- Draw/update: `create_view`, `apply_canvas_patch`.
+- Review/checkpoint: `review_canvas`, `snapshot_canvas`, `restore_snapshot`.
+- Finalize: `export_canvas`, `export_to_excalidraw_url`.
+- Structured conversion: `create_from_mermaid` when the source is naturally Mermaid-shaped.
 
-`create_view` translates `cameraUpdate` pseudo-elements into the workbench viewport. It also supports optional `reveal: true` progressive live updates for demos and walkthroughs; keep it off for normal fast diagram generation.
+The MCP surface is intentionally small so the agent sees workflows instead of dozens of low-level edit helpers. `create_view` translates `cameraUpdate` pseudo-elements into the workbench viewport. Optional `reveal: true` sends staged HTTP live updates for demos and walkthroughs; it is not true MCP partial streaming.
 
 `share` / `export_to_excalidraw_url` are explicit external-sharing actions. They encrypt the scene payload locally and upload it to Excalidraw's JSON store only when invoked. Use `--dry-run` to verify payload generation without uploading.
 
@@ -190,13 +189,15 @@ The skill tells the agent to:
 
 - read `excalidraw-codex config` and `excalidraw-codex mcp-config` first;
 - use the MCP canvas bridge as the default drawing path;
-- open or create a canvas, read drawing guidance, check live canvas status, read current canvas context, then draw with semantic batches instead of blind whole-file generation;
-- use `review_canvas` for complex or visual-quality-sensitive diagrams before calling the work done; it returns a PNG plus structure/QA/review guidance in one packet;
-- choose the expression strategy in the LLM layer: intent, visual organization, reading path, language, copy density, shape/component language, and library usage;
+- open or create a canvas, read drawing guidance, read current live canvas context, then draw with semantic workflow tools instead of blind whole-file generation;
+- use `review_canvas` for complex or visual-quality-sensitive diagrams before calling the work done; it returns a temporary inspection PNG plus structure/QA/review guidance in one packet;
+- choose the expression strategy in the LLM layer: intent, visual model, reading path, language, copy density, and shape/component language;
+- choose live-first cadence from the user's intent and task complexity rather than applying one fixed skeleton/region/lane/module rhythm;
+- keep simple requests fast, while pushing complex participatory diagrams to the browser at reviewable checkpoints before the final answer;
 - use Mermaid only when the structure is naturally Mermaid-shaped;
 - treat recipes and libraries as optional visual building blocks, not rigid templates or mandatory decoration;
 - validate and QA without turning every warning into rigid automatic layout;
-- export PNG/SVG previews;
+- export PNG/SVG previews when finalizing the artifact;
 - open the local browser workbench for editing;
 - inspect or diff the edited canvas before continuing.
 
@@ -207,8 +208,14 @@ Live canvas behavior:
 - The browser workbench syncs the current canvas to the local service as a live draft.
 - MCP tools prefer the live draft when available, then fall back to the saved `.excalidraw` file.
 - Patch/export/snapshot tools materialize the live draft first so unsaved user edits are not dropped.
-- After MCP writes a scene, the browser workbench polls live revisions and applies the update automatically.
-- Manual Save remains the user-facing file action for gallery previews and explicit persistence.
+- After MCP writes a scene, the browser workbench receives live updates over SSE when available and polls as a fallback.
+- `open_or_create_canvas` can report `readiness.browserReady` and wait for a scene subscriber with `waitForSubscriberMs`, which is the safe handshake before the first visible live write.
+- MCP writing tools keep stage updates live-only by default. They refresh the active browser canvas, not the gallery thumbnail.
+- Use `export_canvas` for the final PNG/SVG and gallery thumbnail refresh, or pass `refreshPreview: true` only when an intermediate thumbnail is explicitly useful.
+- Live writes use server-side revisions. If a stale write is detected, the caller should read the latest live canvas before continuing.
+- Live-first does not mean pausing after every element. It means completed meaningful stages become visible in the browser while the agent is still working on complex tasks.
+- Agent progress updates should describe visible drawing progress and avoid exposing internal protocol details unless the user asks.
+- Manual Save remains the user-facing explicit persistence action for browser edits.
 
 ## Runtime Configuration
 

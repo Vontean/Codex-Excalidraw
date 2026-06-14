@@ -143,17 +143,16 @@ excalidraw-codex mcp
 
 `mcp-config` 用来输出可配置到 Codex / Claude Code 的 MCP 片段。`mcp` 会启动 stdio MCP server，通常由 Agent 客户端启动，不需要用户手动长期开着。
 
-MCP 工具分组：
+公开 MCP workflow 工具：
 
-- 直接绘制协议：`read_me`、`create_view`、`describe_scene`。这一层借鉴成熟 Excalidraw MCP 的 compact element array、camera/checkpoint 和画布读回模式。
-- 格式兼容：`create_from_mermaid`、`export_scene`、`import_scene`、`export_to_image`、`export_to_excalidraw_url` 让常见 Excalidraw MCP 工作流不用离开 MCP 画布链路。
-- 画布感知：`get_live_canvas_status`、`get_canvas_context`、`review_canvas`、`get_canvas_screenshot`、`query_elements`、`get_element`。
-- 绘制 / 编辑：`batch_create_elements`、`update_element`、`delete_element`、`group_elements`、`ungroup_elements`、`align_elements`、`distribute_elements`、`apply_canvas_patch`、`clear_canvas`、`duplicate_elements`、`lock_elements`、`unlock_elements`、`set_viewport`。
-- 绘图指南：`read_diagram_guide`，覆盖 workflow、layout、visual language、text、review 和具体 Excalidraw anti-pattern。
-- Libraries：`search_libraries`、`inspect_library`、`insert_library_item`。
-- 生命周期：`open_or_create_canvas`、`snapshot_canvas`、`snapshot_scene`、`restore_snapshot`、`inspect_canvas`、`export_canvas`、`list_canvases`、`get_runtime_config`。
+- 绘图指南：`read_diagram_guide`。
+- 会话 / 读回：`open_or_create_canvas`、`get_canvas_context`。
+- 绘制 / 更新：`create_view`、`apply_canvas_patch`。
+- Review / checkpoint：`review_canvas`、`snapshot_canvas`、`restore_snapshot`。
+- 收尾：`export_canvas`、`export_to_excalidraw_url`。
+- 结构转换：`create_from_mermaid`，只在来源天然适合 Mermaid 时使用。
 
-`create_view` 会把 `cameraUpdate` 伪元素转换成工作台视口。它也支持可选的 `reveal: true` 渐进式 live 更新，适合演示和分步讲解；普通快速生成默认不要打开。
+MCP surface 会刻意保持小，只暴露真实 workflow，而不是几十个低层编辑 helper。`create_view` 会把 `cameraUpdate` 伪元素转换成工作台视口。可选的 `reveal: true` 是分阶段 HTTP live 更新，适合演示和分步讲解；它不等于真正的 MCP partial streaming。
 
 `share` / `export_to_excalidraw_url` 是显式外部分享动作。它会先在本地加密 scene payload，然后只有在被明确调用时才上传到 Excalidraw JSON store。使用 `--dry-run` 可以只验证 payload 生成，不上传。
 
@@ -190,13 +189,15 @@ Skill 会指导 Agent：
 
 - 先读取 `excalidraw-codex config` 和 `excalidraw-codex mcp-config`；
 - 默认使用 MCP 画布桥进行绘制和读回；
-- 先打开或创建画布，读取绘图指南、检查 live canvas 状态、读取当前画布上下文，再用语义批次 patch 画布，避免盲目整张重生成；
-- 对复杂图、低保真界面或视觉质量敏感的图，使用 `review_canvas` 回看之后再判断是否完成；它会一次返回 PNG、结构上下文、QA 和 review 原则；
-- 在 LLM 层判断表达策略：意图、视觉组织方式、阅读路径、语言、文案密度、形状 / 组件语言和 library 使用；
+- 先打开或创建画布，读取绘图指南、读取当前 live 画布上下文，再用 workflow 工具语义化绘制，避免盲目整张重生成；
+- 对复杂图、低保真界面或视觉质量敏感的图，使用 `review_canvas` 回看之后再判断是否完成；它会一次返回临时检查 PNG、结构上下文、QA 和 review 原则；
+- 在 LLM 层判断表达策略：意图、visual model、阅读路径、语言、文案密度和形状 / 组件语言；
+- 根据用户意图和任务复杂度决定 live-first 节奏，而不是固定套用骨架 / 区域 / 泳道 / 模块流程；
+- 简单需求保持快速；复杂且需要参与感的图，在最终回答之前把可评审阶段同步到浏览器；
 - 只在结构天然适合 Mermaid 时使用 Mermaid；
 - 把 recipes 和 libraries 当作可选视觉积木，而不是僵硬模板或强制装饰；
 - 执行 validate 和 QA，但不把每个 warning 都变成僵硬的自动排版；
-- 导出 PNG/SVG 预览；
+- 在最终确认时导出 PNG/SVG 预览；
 - 打开本地浏览器工作台让用户编辑；
 - 在用户编辑后，通过 inspect 或 diff 读回画布，再继续协作。
 
@@ -207,8 +208,14 @@ Live canvas 行为：
 - 浏览器工作台会把当前画布同步到本地服务，作为 live draft。
 - MCP 工具会优先读取 live draft；没有 live draft 时再读取保存后的 `.excalidraw` 文件。
 - patch、export、snapshot 会先把 live draft materialize 到文件，避免用户未保存的编辑被丢掉。
-- MCP 写入场景后，浏览器工作台会轮询 live revision 并自动应用更新。
-- 手动 Save 仍然是用户可见的正式保存动作，用于画廊预览和显式持久化。
+- MCP 写入场景后，浏览器工作台会优先通过 SSE 接收 live 更新，并用轮询作为 fallback。
+- `open_or_create_canvas` 会返回 `readiness.browserReady`，也可以通过 `waitForSubscriberMs` 等待浏览器订阅目标 scene；这是第一次可见 live 写入前的安全握手。
+- MCP 写入工具默认只更新当前 live 画布，不刷新画廊缩略图。
+- 最终确认时使用 `export_canvas` 导出 PNG/SVG 并刷新画廊缩略图；只有明确需要中途缩略图时才传 `refreshPreview: true`。
+- live 写入使用服务端 revision。如果检测到 stale write，调用方应该先读最新 live canvas 再继续。
+- live-first 不是每画一个元素都停一下，而是在复杂任务里把完成的有意义阶段及时显示到浏览器中。
+- Agent 的中途进度更新应该描述用户能看到的画面进展，除非用户主动询问，否则不要暴露内部协议、schema、revision 等技术机制。
+- 手动 Save 仍然是用户可见的显式持久化动作，主要用于保存浏览器里的手动编辑。
 
 ## 运行配置
 

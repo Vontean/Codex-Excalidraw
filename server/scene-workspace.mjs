@@ -81,9 +81,12 @@ export async function deleteScene(name) {
   await ensureArtifactsDir();
   const fileName = normalizeSceneName(name);
   const sourcePath = scenePath(fileName);
-  const previewPaths = ["png", "svg"].map((extension) =>
-    path.join(artifactsDir, fileName.replace(/\.excalidraw$/, `.${extension}`))
-  );
+  const previewPaths = [
+    ...["png", "svg"].map((extension) =>
+      path.join(artifactsDir, fileName.replace(/\.excalidraw$/, `.${extension}`))
+    ),
+    path.join(artifactsDir, fileName.replace(/\.excalidraw$/, ".review.png"))
+  ];
   const sceneSnapshotsDir = path.join(snapshotsDir, sceneSlug(fileName));
 
   await fs.unlink(sourcePath);
