@@ -7,6 +7,8 @@ metadata:
 
 # Excalidraw Diagram
 
+This is the agent instruction file for Codex / Claude Code. If you only want to install or use Codex Excalidraw, start with `README.md` or `README.zh-CN.md`.
+
 Use this skill as an intent-first, live-first Excalidraw workflow. Excalidraw is a shared canvas: read it, draw in meaningful increments, review visually, and continue from user edits.
 
 ## Runtime Discovery

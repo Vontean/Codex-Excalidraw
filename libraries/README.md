@@ -1,27 +1,26 @@
-# Excalidraw Library Registry
+# Excalidraw library registry
 
-This folder stores selected public Excalidraw libraries for Codex-assisted drawing.
+This folder contains optional public Excalidraw libraries that can be loaded into the local workbench. They are useful when a canvas needs real UI controls, decision symbols, business templates, or chart pieces instead of plain boxes and arrows.
 
-The raw `.excalidrawlib` files live under `libraries/vendor/`. Metadata and selection rules live in `libraries/registry.json`.
+The raw `.excalidrawlib` files live in `libraries/vendor/`. Metadata and local search rules live in `libraries/registry.json`.
 
-## Use Principles
-
-- Select libraries from the user's drawing intent, not from a fixed template.
-- Use libraries as reusable visual language: UI controls, emoji accents, decision nodes, business canvases, or data charts.
-- Search is safe and read-only; installation must be explicitly triggered by the user.
-- Do not force a library into a scene. A good plain Excalidraw diagram is better than decorative noise.
-- Keep every generated result editable. Library components should remain Excalidraw elements.
-- Record selected library ids in `appState.codex.libraries` so future read-back can explain the choice.
-
-## Installed Libraries
+## Included libraries
 
 - `basic-ux-wireframing-elements`: low-fidelity UI and product wireframes.
-- `emojis-anumitha-apollo`: playful emotion/status accents.
-- `decision-flow-control`: yes/no condition and branching controls.
+- `emojis-anumitha-apollo`: small emotion and status accents.
+- `decision-flow-control`: yes/no conditions and branching controls.
 - `business-model-templates`: Business Model Canvas and Value Proposition Canvas.
 - `data-viz-dbs-sticky`: chart components for dashboards and data stories.
 
-## Extending
+## Use from the CLI
+
+List and search local libraries:
+
+```sh
+excalidraw-codex library list
+excalidraw-codex library search "wireframe"
+excalidraw-codex library select "mobile onboarding flow"
+```
 
 Search the official public directory without changing local files:
 
@@ -29,10 +28,14 @@ Search the official public directory without changing local files:
 excalidraw-codex library remote-search "kanban"
 ```
 
-Install a specific official library only after the user explicitly chooses it:
+Install a public library only after choosing one:
 
 ```sh
 excalidraw-codex library install moochin/simple-characters.excalidrawlib --id simple-characters
 ```
 
-Use `--dry-run` before installation to preview the registry entry.
+Use `--dry-run` first when you want to preview the registry entry.
+
+## Notes
+
+Libraries are building blocks, not templates that must be forced into every scene. A plain Excalidraw diagram is often better than a busy one. Installed items should remain editable Excalidraw elements.

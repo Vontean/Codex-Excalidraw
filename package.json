@@ -1,7 +1,7 @@
 {
   "name": "codex-excalidraw",
   "version": "0.1.0",
-  "description": "Local Excalidraw workbench, CLI, and agent skill for Codex and Claude Code.",
+  "description": "Local-first Excalidraw workbench, CLI, and MCP bridge for AI-assisted editable diagrams.",
   "license": "MIT",
   "repository": {
     "type": "git",

@@ -12,5 +12,18 @@ artifacts/excalidraw/**
 !.env.example
 *.log
 
+# Local agent instructions and private working notes.
+AGENTS.md
+CLAUDE.md
+.codex/
+.claude/
+*.local.md
+*.private.md
+*.notes.md
+docs/*draft*
+docs/*discussion*
+docs/*plan*
+docs/*refactor*
+
 ABILITY.md
 DIAGRAM_REFERENCE_RESEARCH.md

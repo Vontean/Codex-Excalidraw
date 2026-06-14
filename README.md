@@ -2,45 +2,40 @@
 
 English | [简体中文](README.zh-CN.md)
 
-Local Excalidraw workbench, MCP canvas bridge, CLI, and agent skill for Codex and Claude Code.
+AI agents draw with you on a local Excalidraw canvas. Keep the workbench open in your browser, let Codex or Claude Code create and revise the diagram, edit by hand when you want, and export editable `.excalidraw`, PNG, or SVG files at the end.
 
-The goal is not to replace Mermaid. It gives agents a canvas-aware way to create editable Excalidraw canvases, read the current scene, patch it in semantic batches, export PNG/SVG previews, open a local browser workbench, and continue from user edits during an implementation conversation.
+Codex Excalidraw is local by default. Your scenes, snapshots, and exports stay on your machine. External Excalidraw share links are created only when you run a share command.
 
-## What You Get
+This repository packages four pieces:
 
-- A Vite + React + TypeScript Excalidraw workbench.
-- A lightweight MCP server named `excalidraw-codex` for canvas-aware agent collaboration.
-- A CLI named `excalidraw-codex`.
-- A portable `excalidraw-diagram` skill for Codex and Claude Code.
-- Mermaid-to-Excalidraw conversion with `@excalidraw/mermaid-to-excalidraw`.
-- Canvas tools for reading scene context, applying patches, inserting library items, inspecting user edits, snapshots, and exports.
-- Legacy quick-draft helpers for Mermaid and natural-language briefs when MCP is unavailable or a rough first pass is enough.
-- Optional public Excalidraw library registry for wireframes, emoji accents, decision controls, business canvases, and data-viz components.
+- a browser workbench at `http://127.0.0.1:3000/`;
+- the `excalidraw-codex` CLI for setup, serving, export, snapshots, QA, and libraries;
+- an MCP server so agents can read and update the current canvas;
+- an optional `excalidraw-diagram` skill for Codex and Claude Code.
 
-## How It Is Organized
+## When to use it
 
-- `Canvas Bridge`: the main agent Interface for opening scenes, reading compact canvas context, applying semantic patches, inserting library items, snapshotting, inspecting, and exporting.
-- `MCP Server`: exposes the Canvas Bridge to Codex / Claude Code as tools. This is Codex's "eye and hand" for the canvas.
-- `CLI`: owns deterministic setup, workbench serving, config, library installation/search, validation, file export, and fallback commands.
-- `Scene Workspace`: owns local scene files, snapshots, preview metadata, and artifact paths.
-- `Quality / Export`: keeps QA and browser-rendered PNG/SVG export close to the actual Excalidraw rendering path.
-- `Legacy Draft Recipes`: keep Mermaid and brief-to-scene helpers available as fallback, not as the default creative path.
+Use this when a diagram needs to stay editable, or when you want to collaborate with an agent while watching the canvas change.
 
-## Requirements
+Good fits:
 
-- macOS, Linux, or Windows with a recent shell.
-- Node.js 20+; Node 22 LTS is recommended.
+- architecture maps and system explanations;
+- product flows, page maps, and low-fidelity UI sketches;
+- process diagrams and decision trees;
+- whiteboard-style planning, evidence boards, and concept maps;
+- Mermaid-style diagrams that should become editable Excalidraw scenes.
+
+If you only need a static Mermaid diagram in Markdown, Mermaid is usually enough. This project is for the moments where the canvas matters.
+
+## Quick start
+
+Requirements:
+
+- Node.js 20 or newer. Node 22 LTS is recommended.
 - npm.
+- A terminal on macOS, Linux, or Windows.
 
-Core dependencies are installed by the setup script:
-
-```sh
-npm install react react-dom @excalidraw/excalidraw @excalidraw/mermaid-to-excalidraw @modelcontextprotocol/sdk
-```
-
-## Install
-
-Clone the repository, then run the setup script:
+Install:
 
 ```sh
 git clone https://github.com/Vontean/Codex-Excalidraw.git
@@ -48,18 +43,97 @@ cd Codex-Excalidraw
 npm run setup
 ```
 
-The setup script will:
+The setup script installs dependencies, installs Playwright Chromium for export rendering, builds the workbench, links the `excalidraw-codex` CLI, writes local config to `~/.codex-excalidraw/config.json`, and installs the `excalidraw-diagram` skill when Codex or Claude Code skill folders are available.
 
-- install npm dependencies;
-- install Playwright Chromium for export rendering;
-- build the workbench;
-- link the `excalidraw-codex` CLI locally with `npm link`;
-- write local runtime config to `~/.codex-excalidraw/config.json`;
-- install the `excalidraw-diagram` skill into Codex and Claude Code skill folders.
+Restart Codex or Claude Code after setup so the new skill and MCP configuration are loaded.
 
-Restart Codex or Claude Code after setup so the skill list is refreshed.
+Start the workbench:
 
-### Install Options
+```sh
+excalidraw-codex serve
+```
+
+Open:
+
+```text
+http://127.0.0.1:3000/
+```
+
+Then ask your agent for a diagram:
+
+```text
+Use Excalidraw to draw an editable system architecture map for this project.
+```
+
+Generated scenes are stored in the configured artifacts directory. By default:
+
+```text
+artifacts/excalidraw/
+```
+
+## How the workflow works
+
+1. Open or reuse the local browser workbench.
+2. Ask Codex or Claude Code to draw with Excalidraw.
+3. The agent creates a scene, reads the current canvas, and makes meaningful updates instead of replacing the file blindly.
+4. You can edit the canvas in the browser. The agent can read those edits and continue from them.
+5. Export the final result as `.excalidraw`, PNG, SVG, or all of them.
+
+The important part is read-back. The agent is not just generating a file once; it can inspect the current canvas and keep working from the latest version.
+
+## Common commands
+
+```sh
+excalidraw-codex config
+excalidraw-codex doctor
+excalidraw-codex serve
+excalidraw-codex open product-map.excalidraw
+excalidraw-codex validate product-map.excalidraw
+excalidraw-codex qa product-map.excalidraw
+excalidraw-codex export product-map.excalidraw --format all
+excalidraw-codex snapshot product-map.excalidraw --label before-edit
+excalidraw-codex restore product-map.excalidraw --from latest
+```
+
+Convert Mermaid when the source is already Mermaid-shaped:
+
+```sh
+excalidraw-codex from-mermaid diagram.md --scene architecture.excalidraw
+```
+
+Create a rough first pass from a text brief:
+
+```sh
+excalidraw-codex from-brief brief.txt --scene product-flow.excalidraw
+```
+
+Create an external Excalidraw share link only when you mean to:
+
+```sh
+excalidraw-codex share product-map.excalidraw --dry-run
+```
+
+Without `--dry-run`, `share` uploads an encrypted payload to Excalidraw's JSON store. Normal editing, MCP work, export, snapshots, and local files stay on your machine.
+
+## Agent and MCP setup
+
+For most users, `npm run setup` is enough. It installs the skill and writes the MCP config snippet when the expected folders exist.
+
+If you need to configure an agent manually, print the snippet:
+
+```sh
+excalidraw-codex mcp-config --json
+```
+
+The MCP server command is:
+
+```sh
+excalidraw-codex mcp
+```
+
+The MCP tools are intentionally workflow-level. They cover opening a canvas, reading context, creating or patching a view, reviewing the result, taking snapshots, restoring snapshots, exporting, and creating a scene from Mermaid.
+
+## Setup options
 
 Install only for Codex:
 
@@ -73,7 +147,7 @@ Install only for Claude Code:
 npm run setup -- --agents claude
 ```
 
-Choose a different workspace or artifacts directory:
+Choose where scenes and exports are stored:
 
 ```sh
 npm run setup -- --workspace ~/Codex-Excalidraw --artifacts ~/Codex-Excalidraw/artifacts/excalidraw
@@ -86,189 +160,50 @@ npm run setup -- --skip-playwright
 npm run setup -- --skip-link
 ```
 
-Run build and smoke tests during setup:
+Run smoke verification during setup:
 
 ```sh
 npm run setup -- --verify
 ```
 
-## Run The Workbench
+## Libraries
 
-Start the local server:
+The bundled library registry includes optional Excalidraw building blocks for wireframes, decision controls, business canvases, and data visualization.
 
-```sh
-excalidraw-codex serve
-```
-
-Open:
-
-```text
-http://127.0.0.1:3000/
-```
-
-Open a specific scene:
-
-```sh
-excalidraw-codex open my-diagram.excalidraw
-```
-
-## CLI
-
-Common commands:
-
-```sh
-excalidraw-codex config
-excalidraw-codex doctor
-excalidraw-codex serve
-excalidraw-codex mcp-config
-excalidraw-codex mcp
-excalidraw-codex from-mermaid diagram.md --scene architecture.excalidraw
-excalidraw-codex validate product-map.excalidraw
-excalidraw-codex qa product-map.excalidraw
-excalidraw-codex export product-map.excalidraw --format all --require-qa
-excalidraw-codex share product-map.excalidraw --dry-run
-excalidraw-codex inspect product-map.excalidraw --from latest
-excalidraw-codex snapshot product-map.excalidraw --label before-edit --keep 80
-excalidraw-codex gallery-refresh --all
-```
-
-`serve` uses the production build by default and is safe to launch from another project directory. It checks `dist/` before starting and automatically rebuilds when the workbench assets are missing or older than the source files. Use `excalidraw-codex serve --dev` only when developing this workbench itself.
-
-MCP commands:
-
-```sh
-excalidraw-codex mcp-config --json
-excalidraw-codex mcp
-```
-
-Use `mcp-config` to get the agent config snippet. `mcp` starts the stdio MCP server and is intended to be launched by Codex / Claude Code, not manually kept in a terminal.
-
-Public MCP workflow tools:
-
-- Guidance: `read_diagram_guide`.
-- Session/read: `open_or_create_canvas`, `get_canvas_context`.
-- Draw/update: `create_view`, `apply_canvas_patch`.
-- Review/checkpoint: `review_canvas`, `snapshot_canvas`, `restore_snapshot`.
-- Finalize: `export_canvas`, `export_to_excalidraw_url`.
-- Structured conversion: `create_from_mermaid` when the source is naturally Mermaid-shaped.
-
-The MCP surface is intentionally small so the agent sees workflows instead of dozens of low-level edit helpers. `create_view` translates `cameraUpdate` pseudo-elements into the workbench viewport. Optional `reveal: true` sends staged HTTP live updates for demos and walkthroughs; it is not true MCP partial streaming.
-
-`share` / `export_to_excalidraw_url` are explicit external-sharing actions. They encrypt the scene payload locally and upload it to Excalidraw's JSON store only when invoked. Use `--dry-run` to verify payload generation without uploading.
-
-Path semantics:
-
-- `--scene <name.excalidraw>` means a named scene in the configured workbench `artifactsDir`.
-- `--out ./path/to/file.excalidraw` writes a real file path.
-- Read commands such as `validate`, `read`, `inspect`, `qa`, and `export` respect absolute or relative file paths.
-- Quote browser URLs that contain `?`, for example: `"http://127.0.0.1:3000/?scene=product-map.excalidraw"`.
-
-Library commands:
+Search local libraries:
 
 ```sh
 excalidraw-codex library list
 excalidraw-codex library search "wireframe"
 excalidraw-codex library select "mobile onboarding flow"
+```
+
+Install a public library only after choosing one:
+
+```sh
 excalidraw-codex library remote-search "kanban"
 excalidraw-codex library install <official-id-or-source>
 ```
 
-Library search is read-only. New public libraries should only be installed when the user explicitly asks for a specific library.
+Installed libraries load into the Excalidraw Library panel when the workbench starts.
 
-Installed registry libraries are also loaded into the workbench's Excalidraw Library panel at startup. After installing a new library, refresh or restart the workbench to make its components available in the in-browser canvas.
+## Configuration
 
-## Agent Usage
-
-After setup and restart, ask Codex or Claude Code for diagrams naturally:
-
-```text
-Use Excalidraw to draw an editable architecture map for this product idea.
-```
-
-The skill tells the agent to:
-
-- read `excalidraw-codex config` and `excalidraw-codex mcp-config` first;
-- use the MCP canvas bridge as the default drawing path;
-- open or create a canvas, read drawing guidance, read current live canvas context, then draw with semantic workflow tools instead of blind whole-file generation;
-- use `review_canvas` for complex or visual-quality-sensitive diagrams before calling the work done; it returns a temporary inspection PNG plus structure/QA/review guidance in one packet;
-- choose the expression strategy in the LLM layer: intent, visual model, reading path, language, copy density, and shape/component language;
-- choose live-first cadence from the user's intent and task complexity rather than applying one fixed skeleton/region/lane/module rhythm;
-- keep simple requests fast, while pushing complex participatory diagrams to the browser at reviewable checkpoints before the final answer;
-- use Mermaid only when the structure is naturally Mermaid-shaped;
-- treat recipes and libraries as optional visual building blocks, not rigid templates or mandatory decoration;
-- validate and QA without turning every warning into rigid automatic layout;
-- export PNG/SVG previews when finalizing the artifact;
-- open the local browser workbench for editing;
-- inspect or diff the edited canvas before continuing.
-
-Generated canvas text follows the user's current language by default. If the user is speaking Chinese, the diagram labels should be Chinese; if the user is speaking English, labels should be English. Product names, API names, filenames, and code identifiers are preserved.
-
-Live canvas behavior:
-
-- The browser workbench syncs the current canvas to the local service as a live draft.
-- MCP tools prefer the live draft when available, then fall back to the saved `.excalidraw` file.
-- Patch/export/snapshot tools materialize the live draft first so unsaved user edits are not dropped.
-- After MCP writes a scene, the browser workbench receives live updates over SSE when available and polls as a fallback.
-- `open_or_create_canvas` can report `readiness.browserReady` and wait for a scene subscriber with `waitForSubscriberMs`, which is the safe handshake before the first visible live write.
-- MCP writing tools keep stage updates live-only by default. They refresh the active browser canvas, not the gallery thumbnail.
-- Use `export_canvas` for the final PNG/SVG and gallery thumbnail refresh, or pass `refreshPreview: true` only when an intermediate thumbnail is explicitly useful.
-- Live writes use server-side revisions. If a stale write is detected, the caller should read the latest live canvas before continuing.
-- Live-first does not mean pausing after every element. It means completed meaningful stages become visible in the browser while the agent is still working on complex tasks.
-- Agent progress updates should describe visible drawing progress and avoid exposing internal protocol details unless the user asks.
-- Manual Save remains the user-facing explicit persistence action for browser edits.
-
-## Runtime Configuration
-
-The setup script writes:
+Setup writes local config to:
 
 ```text
 ~/.codex-excalidraw/config.json
 ```
 
-Example:
-
-```json
-{
-  "workspaceRoot": "/path/to/Codex-Excalidraw",
-  "artifactsDir": "/path/to/Codex-Excalidraw/artifacts/excalidraw",
-  "defaultFontFamily": "Nunito",
-  "snapshotRetentionLimit": 80,
-  "installedFrom": "/path/to/Codex-Excalidraw",
-  "cli": "excalidraw-codex",
-  "mcp": {
-    "command": "excalidraw-codex",
-    "args": ["mcp"]
-  }
-}
-```
-
-You can also override paths with environment variables:
+Common environment overrides:
 
 ```sh
 export EXCALIDRAW_CODEX_HOME=~/Codex-Excalidraw
 export EXCALIDRAW_CODEX_ARTIFACTS_DIR=~/Codex-Excalidraw/artifacts/excalidraw
 export EXCALIDRAW_CODEX_CONFIG_DIR=~/.codex-excalidraw
 export EXCALIDRAW_CODEX_FONT=Nunito
+export EXCALIDRAW_CODEX_CANVAS_BACKGROUND="#f8f9fa"
 export EXCALIDRAW_CODEX_SNAPSHOT_LIMIT=80
-export EXCALIDRAW_CODEX_SHARE_ENDPOINT=https://json.excalidraw.com/api/v2/post/
-```
-
-`EXCALIDRAW_CODEX_FONT` controls generated text and the workbench blank-scene default. The default is `Nunito`, which works better for mixed Chinese/English diagrams than Virgil. Supported names include `Nunito`, `Excalifont`, `Virgil`, `Helvetica`, `Cascadia`, `Lilita One`, `Comic Shanns`, and `Liberation Sans`.
-
-Snapshots are a safety net for iterative agent edits. By default, each scene keeps its latest `80` snapshots and prunes older ones after new snapshots are created. Set `EXCALIDRAW_CODEX_SNAPSHOT_LIMIT=0` or `"snapshotRetentionLimit": 0` to keep all snapshots, or use `excalidraw-codex snapshot <scene> --keep <count>` for a one-off override.
-
-## Project Structure
-
-```text
-bin/                         CLI entrypoint
-mcp/                         MCP server exposing canvas-aware tools
-server/                      canvas bridge, local API, scene IO, QA, export, libraries
-src/                         Vite React Excalidraw workbench
-skills/excalidraw-diagram/   portable Codex / Claude Code skill
-libraries/                   optional Excalidraw library registry
-scripts/install.mjs          setup script
-artifacts/excalidraw/        local generated scenes, ignored by git
-dist/                        build output, ignored by git
 ```
 
 ## Development
@@ -276,25 +211,26 @@ dist/                        build output, ignored by git
 ```sh
 npm install
 npm run build
-excalidraw-codex doctor
 npm run test:mcp
 npm run test:live
 npm run verify
 npm run dev
 ```
 
-`test:mcp` verifies the MCP toolkit surface. `test:live` opens a real browser and checks the bidirectional workbench/live/MCP bridge. `verify` runs the production build plus both smoke tests.
+`npm run verify` runs the production build plus MCP and live-browser smoke tests.
 
-`excalidraw-codex doctor` also checks the production build assets, MCP tool surface, local share-payload encryption dry run, and the running port `3000` service capabilities. If the build is missing/stale, run `npm run build` or `excalidraw-codex serve` to rebuild. If an older workbench process is still running, doctor reports the missing capabilities so you can restart the shared workbench instead of silently reusing an incompatible service.
+## Repository hygiene
 
-The default local URL is:
+This repository should publish the tool, not local working state.
 
-```text
-http://127.0.0.1:3000/
-```
+Keep these out of commits:
 
-Port 3000 is the shared workbench port. If it is already serving Excalidraw Codex, new sessions should reuse it instead of opening 3001/3002. If another process owns port 3000 and the health check fails, stop that process or choose an explicit port for a temporary manual run.
+- generated scenes and exports under `artifacts/excalidraw/`;
+- `dist/` and `node_modules/`;
+- local `.env` files;
+- local agent instructions such as `AGENTS.md` or `CLAUDE.md`;
+- private notes, drafts, planning documents, or discussion transcripts.
 
-## Privacy Notes
+## License
 
-This repository should not include local user paths, private planning notes, build output, `node_modules`, or generated diagrams. Runtime files stay local through `.gitignore` and `~/.codex-excalidraw/config.json`.
+MIT
