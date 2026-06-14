@@ -47,7 +47,19 @@ After installation, restart Codex or Claude Code so the new drawing capability t
 
 ## Manual installation
 
-If you want to install it yourself in a terminal, use:
+If you want to try the published beta package, install the CLI with:
+
+```sh
+npm install -g codex-excalidraw@beta
+```
+
+Then start the local workbench:
+
+```sh
+excalidraw-codex serve
+```
+
+For full local setup from source, including the bundled Codex / Claude Code skill, use:
 
 ```sh
 git clone https://github.com/Vontean/Codex-Excalidraw.git
@@ -57,7 +69,7 @@ npm run setup
 
 `setup` first checks whether your machine already has a browser that can be used for export, such as a Playwright browser cache or system Chrome / Chromium. If none is found, it asks whether to download Playwright Chromium. You can choose not to download it and later install a browser yourself, or set `EXCALIDRAW_CODEX_BROWSER_EXECUTABLE` to a browser path.
 
-Then start the local workbench:
+After setup, start the local workbench:
 
 ```sh
 excalidraw-codex serve

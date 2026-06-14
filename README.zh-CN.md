@@ -47,7 +47,19 @@ https://github.com/Vontean/Codex-Excalidraw
 
 ## 手动安装
 
-如果你想自己在终端里安装，可以使用：
+如果你想试用已经发布的 beta 版，可以先全局安装 CLI：
+
+```sh
+npm install -g codex-excalidraw@beta
+```
+
+然后启动本地工作台：
+
+```sh
+excalidraw-codex serve
+```
+
+如果你想从源码完整安装，并同时安装内置的 Codex / Claude Code skill，可以使用：
 
 ```sh
 git clone https://github.com/Vontean/Codex-Excalidraw.git
@@ -57,7 +69,7 @@ npm run setup
 
 `setup` 会先检测本机是否已经有可用于导出的浏览器，例如 Playwright browser cache 或系统 Chrome / Chromium。如果没有检测到，它会询问是否下载 Playwright Chromium；你也可以选择不下载，之后自己安装或通过 `EXCALIDRAW_CODEX_BROWSER_EXECUTABLE` 指定浏览器路径。
 
-然后启动本地工作台：
+完成 setup 后，启动本地工作台：
 
 ```sh
 excalidraw-codex serve
