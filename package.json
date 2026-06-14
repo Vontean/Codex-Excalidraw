@@ -22,6 +22,7 @@
   "files": [
     ".env.example",
     "bin/",
+    "docs/images/",
     "export.html",
     "index.html",
     "libraries/",
