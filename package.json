@@ -2,7 +2,7 @@
   "name": "codex-excalidraw",
   "version": "0.1.0",
   "description": "Local-first Excalidraw workbench, CLI, and MCP bridge for AI-assisted editable diagrams.",
-  "license": "MIT",
+  "license": "SEE LICENSE IN LICENSE",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Vontean/Codex-Excalidraw.git"

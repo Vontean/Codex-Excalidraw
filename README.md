@@ -169,4 +169,11 @@ It is useful for people who often need to turn ideas into diagrams, such as:
 
 ## License
 
-MIT
+Codex Excalidraw is currently released under a beta source-available license.
+You may view the source code and use the tool for personal, educational,
+research, or internal evaluation purposes, but you may not redistribute modified
+versions, publish competing packages, offer it as a hosted service, or use it as
+a commercial product without written permission.
+
+Excalidraw and other third-party dependencies remain under their own respective
+open source licenses. See [LICENSE](LICENSE) for details.
