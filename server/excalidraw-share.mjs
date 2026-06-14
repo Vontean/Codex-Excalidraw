@@ -1,5 +1,6 @@
 import { webcrypto, createHash } from "node:crypto";
 import { deflateSync } from "node:zlib";
+import { defaultCanvasBackgroundColor } from "./config.mjs";
 
 const DEFAULT_UPLOAD_ENDPOINT = "https://json.excalidraw.com/api/v2/post/";
 const ENCODING_METADATA = {
@@ -107,7 +108,7 @@ function makeTextElement(parent, text, index) {
 
 function sanitizeAppState(appState = {}) {
   const next = {
-    viewBackgroundColor: appState.viewBackgroundColor || "#ffffff",
+    viewBackgroundColor: appState.viewBackgroundColor || defaultCanvasBackgroundColor,
     gridSize: appState.gridSize ?? null
   };
   if (Number.isFinite(Number(appState.scrollX))) next.scrollX = Number(appState.scrollX);

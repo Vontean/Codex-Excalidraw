@@ -1,5 +1,5 @@
 import { chromium } from "playwright";
-import { defaultFontFamily } from "./config.mjs";
+import { defaultCanvasBackgroundColor, defaultFontFamily } from "./config.mjs";
 
 const SCENE_SOURCE = "https://codex.local/excalidraw-codex";
 
@@ -24,7 +24,7 @@ export function createSceneFromElements(elements = [], files = {}, options = {})
     source: SCENE_SOURCE,
     elements: elements.map(normalizeFontOnElement),
     appState: {
-      viewBackgroundColor: options.backgroundColor || "#ffffff",
+      viewBackgroundColor: options.backgroundColor || defaultCanvasBackgroundColor,
       gridSize: null,
       currentItemFontFamily: defaultFontFamily,
       codex: {

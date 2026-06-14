@@ -47,8 +47,7 @@ const PUBLIC_TOOL_DEFINITIONS = [
         includeElements: { type: "boolean", description: "Return compact element outline; default true." },
         waitForSubscriberMs: { type: "number", description: "Optionally wait for the browser workbench to subscribe to this scene before returning readiness metadata." },
         baseUrl: { type: "string", description: "Workbench URL, default http://127.0.0.1:3000/." }
-      },
-      required: ["scene"]
+      }
     }
   },
   {
@@ -62,8 +61,7 @@ const PUBLIC_TOOL_DEFINITIONS = [
         maxElements: { type: "number", description: "Maximum compact elements to return." },
         qa: { type: "boolean", description: "Include QA summary; default true." },
         baseUrl: { type: "string", description: "Workbench URL, default http://127.0.0.1:3000/." }
-      },
-      required: ["scene"]
+      }
     }
   },
   {
@@ -116,8 +114,7 @@ const PUBLIC_TOOL_DEFINITIONS = [
         refreshPreview: { type: "boolean", description: "Refresh the gallery PNG preview after writing; default false. Prefer export_canvas for the final preview." },
         baseRevision: { type: "string", description: "Optional live canvas revision to protect against stale writes." },
         baseUrl: { type: "string", description: "Workbench URL, default http://127.0.0.1:3000/." }
-      },
-      required: ["scene"]
+      }
     }
   },
   {
@@ -132,8 +129,7 @@ const PUBLIC_TOOL_DEFINITIONS = [
         includeGuide: { type: "boolean", description: "Include the review guide; default true." },
         qa: { type: "boolean", description: "Include QA summary; default true." },
         baseUrl: { type: "string", description: "Workbench URL, default http://127.0.0.1:3000/." }
-      },
-      required: ["scene"]
+      }
     }
   },
   {
@@ -145,8 +141,7 @@ const PUBLIC_TOOL_DEFINITIONS = [
         scene: { type: "string" },
         label: { type: "string" },
         baseUrl: { type: "string", description: "Workbench URL, default http://127.0.0.1:3000/." }
-      },
-      required: ["scene"]
+      }
     }
   },
   {
@@ -163,8 +158,7 @@ const PUBLIC_TOOL_DEFINITIONS = [
         refreshPreview: { type: "boolean", description: "Refresh the gallery PNG preview after restoring; default false. Prefer export_canvas for the final preview." },
         baseRevision: { type: "string", description: "Optional live canvas revision to protect against stale writes." },
         baseUrl: { type: "string", description: "Workbench URL, default http://127.0.0.1:3000/." }
-      },
-      required: ["scene"]
+      }
     }
   },
   {
@@ -176,8 +170,7 @@ const PUBLIC_TOOL_DEFINITIONS = [
         scene: { type: "string" },
         format: { type: "string", enum: ["png", "svg", "all"] },
         baseUrl: { type: "string", description: "Workbench URL, default http://127.0.0.1:3000/." }
-      },
-      required: ["scene"]
+      }
     }
   },
   {
@@ -193,8 +186,7 @@ const PUBLIC_TOOL_DEFINITIONS = [
         includeDeleted: { type: "boolean", description: "Include deleted elements; default false." },
         includeCustomData: { type: "boolean", description: "Include customData metadata; default false for privacy." },
         baseUrl: { type: "string", description: "Workbench URL, default http://127.0.0.1:3000/." }
-      },
-      required: ["scene"]
+      }
     }
   },
   {
@@ -214,8 +206,7 @@ const PUBLIC_TOOL_DEFINITIONS = [
         format: { type: "string", enum: ["png", "svg", "all"] },
         snapshot: { type: "boolean" },
         baseUrl: { type: "string", description: "Workbench URL, default http://127.0.0.1:3000/." }
-      },
-      required: ["scene"]
+      }
     }
   }
 ];

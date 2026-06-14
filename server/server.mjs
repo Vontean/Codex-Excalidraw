@@ -9,6 +9,7 @@ import { runBriefGenerationWorkflow } from "./generation-workflow.mjs";
 import { createSceneFileOperations } from "./scene-file-operations.mjs";
 import {
   artifactsDir,
+  defaultCanvasBackgroundColor,
   defaultFontFamily,
   defaultFontFamilyName,
   getRuntimeConfig,
@@ -23,8 +24,10 @@ import {
   listSnapshots,
   normalizeSceneName,
   readScene,
+  renameScene,
   resolveSnapshotPath,
   restoreSnapshot,
+  scenePath,
   writeScene
 } from "./scene-workspace.mjs";
 import {
@@ -45,6 +48,11 @@ import {
   updateLiveScene
 } from "./live-canvas.mjs";
 import { exportSceneToExcalidrawUrl } from "./excalidraw-share.mjs";
+import {
+  clearActiveCanvas,
+  getActiveCanvas,
+  setActiveCanvas
+} from "./active-canvas.mjs";
 
 export { artifactsDir, defaultFontFamily, defaultFontFamilyName, getRuntimeConfig, projectRoot, snapshotsDir };
 
@@ -97,6 +105,7 @@ function healthPayload() {
     artifactsDir,
     defaultFontFamily,
     defaultFontFamilyName,
+    defaultCanvasBackgroundColor,
     capabilities: SERVER_CAPABILITIES,
     requiredCapabilities: REQUIRED_SERVER_CAPABILITIES
   };
@@ -2048,6 +2057,22 @@ function configureApi(app) {
     response.json({ ok: true, scenes: listLiveScenes() });
   });
 
+  app.get("/api/current-scene", (_request, response) => {
+    response.json(getActiveCanvas());
+  });
+
+  app.post("/api/current-scene", (request, response, next) => {
+    try {
+      response.json(setActiveCanvas({
+        scene: request.body?.scene || request.body?.name,
+        source: request.body?.source || "workbench",
+        clientId: request.body?.clientId
+      }));
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.get("/api/live-scenes/:name/status", (request, response) => {
     response.json(getLiveSceneStatus(request.params.name, {
       includeScene: request.query.includeScene === "true"
@@ -2236,8 +2261,32 @@ function configureApi(app) {
     }
   });
 
+  app.post("/api/scenes/:name/rename", async (request, response, next) => {
+    try {
+      const fromName = normalizeSceneName(request.params.name);
+      const toName = normalizeSceneName(request.body?.to || request.body?.name);
+      const scene = request.body?.scene;
+      if (!scene || scene.type !== "excalidraw" || !Array.isArray(scene.elements)) {
+        throw new Error("Rename payload must include the current Excalidraw scene.");
+      }
+      try {
+        await fs.access(scenePath(toName));
+        const error = new Error(`Scene ${toName} already exists.`);
+        error.code = "EEXIST";
+        throw error;
+      } catch (error) {
+        if (error?.code !== "ENOENT") throw error;
+      }
+      await writeScene(fromName, scene);
+      response.json({ ok: true, ...(await renameScene(fromName, toName)) });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.delete("/api/scenes/:name", async (request, response, next) => {
     try {
+      clearActiveCanvas(request.params.name);
       response.json({ ok: true, ...(await deleteScene(request.params.name)) });
     } catch (error) {
       next(error);
@@ -2392,7 +2441,7 @@ function configureApi(app) {
   });
 
   app.use((error, _request, response, _next) => {
-    const status = error?.code === "ENOENT" ? 404 : 500;
+    const status = error?.code === "ENOENT" ? 404 : error?.code === "EEXIST" ? 409 : 500;
     response.status(status).json({
       ok: false,
       error: error instanceof Error ? error.message : String(error)

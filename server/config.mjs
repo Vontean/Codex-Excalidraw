@@ -53,6 +53,10 @@ export const defaultFontFamilyName = normalizeFontFamilyName(
 );
 
 export const defaultFontFamily = FONT_FAMILY[defaultFontFamilyName];
+export const defaultCanvasBackgroundColor =
+  process.env.EXCALIDRAW_CODEX_CANVAS_BACKGROUND ||
+  config.defaultCanvasBackgroundColor ||
+  "#f8f9fa";
 
 function normalizeNonNegativeInteger(value, fallback) {
   const number = Number(value ?? fallback);
@@ -86,6 +90,7 @@ export function getRuntimeConfig() {
     snapshotRetentionLimit,
     defaultFontFamily,
     defaultFontFamilyName,
+    defaultCanvasBackgroundColor,
     configDir,
     configPath,
     hasConfigFile: Object.keys(config).length > 0

@@ -24,6 +24,16 @@ function sceneSlug(name) {
   return normalizeSceneName(name).replace(/\.excalidraw$/, "");
 }
 
+function scenePreviewPaths(name) {
+  const fileName = normalizeSceneName(name);
+  return [
+    ...["png", "svg"].map((extension) =>
+      path.join(artifactsDir, fileName.replace(/\.excalidraw$/, `.${extension}`))
+    ),
+    path.join(artifactsDir, fileName.replace(/\.excalidraw$/, ".review.png"))
+  ];
+}
+
 async function ensureSceneSnapshotsDir(name) {
   const dir = path.join(snapshotsDir, sceneSlug(name));
   await fs.mkdir(dir, { recursive: true });
@@ -81,12 +91,7 @@ export async function deleteScene(name) {
   await ensureArtifactsDir();
   const fileName = normalizeSceneName(name);
   const sourcePath = scenePath(fileName);
-  const previewPaths = [
-    ...["png", "svg"].map((extension) =>
-      path.join(artifactsDir, fileName.replace(/\.excalidraw$/, `.${extension}`))
-    ),
-    path.join(artifactsDir, fileName.replace(/\.excalidraw$/, ".review.png"))
-  ];
+  const previewPaths = scenePreviewPaths(fileName);
   const sceneSnapshotsDir = path.join(snapshotsDir, sceneSlug(fileName));
 
   await fs.unlink(sourcePath);
@@ -101,6 +106,110 @@ export async function deleteScene(name) {
       source: sourcePath,
       previews: previewPaths,
       snapshotsDir: sceneSnapshotsDir
+    }
+  };
+}
+
+async function pathExists(filePath) {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch (error) {
+    if (error?.code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+async function renameIfExists(fromPath, toPath) {
+  if (!(await pathExists(fromPath))) return false;
+  if (await pathExists(toPath)) {
+    const error = new Error(`Cannot rename because ${toPath} already exists.`);
+    error.code = "EEXIST";
+    throw error;
+  }
+  await fs.mkdir(path.dirname(toPath), { recursive: true });
+  await fs.rename(fromPath, toPath);
+  return true;
+}
+
+export async function renameScene(from, to) {
+  await ensureArtifactsDir();
+  const fromName = normalizeSceneName(from);
+  const toName = normalizeSceneName(to);
+  if (fromName === toName) {
+    return {
+      from: fromName,
+      to: toName,
+      renamed: false,
+      moved: {
+        source: false,
+        previews: [],
+        snapshotsDir: false
+      }
+    };
+  }
+
+  const fromPath = scenePath(fromName);
+  const toPath = scenePath(toName);
+  if (!(await pathExists(fromPath))) {
+    const error = new Error(`Scene ${fromName} does not exist.`);
+    error.code = "ENOENT";
+    throw error;
+  }
+  if (await pathExists(toPath)) {
+    const error = new Error(`Scene ${toName} already exists.`);
+    error.code = "EEXIST";
+    throw error;
+  }
+
+  const fromPreviewPaths = scenePreviewPaths(fromName);
+  const toPreviewPaths = scenePreviewPaths(toName);
+  for (let index = 0; index < fromPreviewPaths.length; index += 1) {
+    if ((await pathExists(fromPreviewPaths[index])) && (await pathExists(toPreviewPaths[index]))) {
+      const error = new Error(`Cannot rename because ${toPreviewPaths[index]} already exists.`);
+      error.code = "EEXIST";
+      throw error;
+    }
+  }
+
+  const fromSnapshotsDir = path.join(snapshotsDir, sceneSlug(fromName));
+  const toSnapshotsDir = path.join(snapshotsDir, sceneSlug(toName));
+  if ((await pathExists(fromSnapshotsDir)) && (await pathExists(toSnapshotsDir))) {
+    const error = new Error(`Cannot rename because ${toSnapshotsDir} already exists.`);
+    error.code = "EEXIST";
+    throw error;
+  }
+
+  await fs.rename(fromPath, toPath);
+
+  const movedPreviews = [];
+  for (let index = 0; index < fromPreviewPaths.length; index += 1) {
+    if (await renameIfExists(fromPreviewPaths[index], toPreviewPaths[index])) {
+      movedPreviews.push({
+        from: fromPreviewPaths[index],
+        to: toPreviewPaths[index]
+      });
+    }
+  }
+
+  const movedSnapshotsDir = await renameIfExists(fromSnapshotsDir, toSnapshotsDir);
+
+  return {
+    from: fromName,
+    to: toName,
+    renamed: true,
+    moved: {
+      source: {
+        from: fromPath,
+        to: toPath
+      },
+      previews: movedPreviews,
+      snapshotsDir: movedSnapshotsDir
+        ? {
+            from: fromSnapshotsDir,
+            to: toSnapshotsDir
+          }
+        : false
     }
   };
 }

@@ -180,6 +180,7 @@ Follow the user's current conversation language for generated canvas text:
 - Leave generous whitespace. Long labels need wider elements or a different composition, not smaller text squeezed into fixed boxes.
 - Treat deterministic layout/polish as an assistant, not the design authority.
 - When the user edits the canvas, read the edited scene first and infer their intent before changing direction.
+- Use the configured default canvas background unless the user explicitly asks for another background.
 - For large background zones, do not use bound/centered labels; place a standalone heading at the top-left of the zone.
 - Keep arrow labels short. If the relationship needs a sentence, use a nearby annotation instead of squeezing text onto a short arrow.
 

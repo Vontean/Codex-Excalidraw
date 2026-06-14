@@ -2,13 +2,13 @@ import {
   createExpressionPlan,
   listExpressionTemplates
 } from "./expression-plan.mjs";
-import { defaultFontFamily } from "./config.mjs";
+import { defaultCanvasBackgroundColor, defaultFontFamily } from "./config.mjs";
 
 const SCENE_SOURCE = "https://codex.local/excalidraw-codex";
 
 const PALETTES = {
   architecture: {
-    canvas: "#ffffff",
+    canvas: defaultCanvasBackgroundColor,
     title: "#111827",
     sectionStroke: "#cbd5e1",
     sectionFill: "#f8fafc",
@@ -22,7 +22,7 @@ const PALETTES = {
     ink: "#1e1e1e"
   },
   product: {
-    canvas: "#ffffff",
+    canvas: defaultCanvasBackgroundColor,
     title: "#111827",
     sectionStroke: "#d6d3d1",
     sectionFill: "#fafaf9",
@@ -33,7 +33,7 @@ const PALETTES = {
     ink: "#1e1e1e"
   },
   wireframe: {
-    canvas: "#ffffff",
+    canvas: defaultCanvasBackgroundColor,
     title: "#111827",
     sectionStroke: "#d4d4d4",
     sectionFill: "#fafafa",
@@ -43,7 +43,7 @@ const PALETTES = {
     ink: "#1e1e1e"
   },
   plan: {
-    canvas: "#ffffff",
+    canvas: defaultCanvasBackgroundColor,
     title: "#111827",
     sectionStroke: "#d1d5db",
     sectionFill: "#f9fafb",
@@ -879,6 +879,13 @@ export function listBriefTemplates() {
 export function generateSceneFromBrief(input = {}) {
   const parsed = parseBrief(input);
   const template = parsed.plan.template;
+  const palette = template === "architecture"
+    ? PALETTES.architecture
+    : template === "implementation-plan"
+      ? PALETTES.plan
+      : template === "product-board"
+        ? PALETTES.product
+        : PALETTES.wireframe;
   const builders = {
     architecture: architectureTemplate,
     "product-board": productBoardTemplate,
@@ -895,7 +902,7 @@ export function generateSceneFromBrief(input = {}) {
       source: SCENE_SOURCE,
       elements,
       appState: {
-        viewBackgroundColor: "#ffffff",
+        viewBackgroundColor: palette.canvas,
         currentItemFontFamily: defaultFontFamily,
         codex: {
           generator: "from-brief",

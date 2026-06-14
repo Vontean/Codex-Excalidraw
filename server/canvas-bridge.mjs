@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs";
 import {
   artifactsDir,
+  defaultCanvasBackgroundColor,
   defaultFontFamily,
   defaultFontFamilyName,
   getRuntimeConfig
@@ -34,6 +35,31 @@ function browserUrl(scene, baseUrl = DEFAULT_WORKBENCH_URL) {
 
 function apiUrl(apiPath, baseUrl = DEFAULT_WORKBENCH_URL) {
   return `${baseUrl.replace(/\/$/, "")}/${apiPath.replace(/^\//, "")}`;
+}
+
+async function fetchActiveCanvas(input = {}) {
+  try {
+    const response = await fetch(apiUrl("/api/current-scene", input.baseUrl));
+    if (!response.ok) return null;
+    const current = await response.json();
+    return current?.active && current.scene ? current : null;
+  } catch {
+    return null;
+  }
+}
+
+async function resolveCanvasScene(input = {}, fallback) {
+  if (input.scene || input.name) {
+    return normalizeSceneName(input.scene || input.name);
+  }
+  const active = await fetchActiveCanvas(input);
+  if (active?.scene) {
+    return normalizeSceneName(active.scene);
+  }
+  if (fallback) {
+    return normalizeSceneName(fallback);
+  }
+  throw new Error("No scene was provided and no active browser canvas is registered. Open a canvas in the workbench or pass a scene name.");
 }
 
 async function fetchLiveScene(scene, input = {}) {
@@ -209,7 +235,7 @@ function createBlankScene(options = {}) {
     source: SCENE_SOURCE,
     elements: [],
     appState: {
-      viewBackgroundColor: options.backgroundColor || "#ffffff",
+      viewBackgroundColor: options.backgroundColor || defaultCanvasBackgroundColor,
       gridSize: null,
       currentItemFontFamily: defaultFontFamily,
       codex: {
@@ -604,7 +630,7 @@ function compactSummary(scene, name, options = {}) {
 }
 
 export async function openOrCreateCanvas(input = {}) {
-  const scene = normalizeSceneName(input.scene || input.name || "codex-canvas.excalidraw");
+  const scene = await resolveCanvasScene(input, "codex-canvas.excalidraw");
   const created = !(await sceneExists(scene));
   if (created) {
     await writeScene(scene, createBlankScene({
@@ -664,7 +690,7 @@ export async function openOrCreateCanvas(input = {}) {
 }
 
 export async function getCanvasContext(input = {}) {
-  const scene = normalizeSceneName(input.scene || input.name);
+  const scene = await resolveCanvasScene(input);
   const current = await readCanvasScene(scene, input);
   const qa = input.qa === false ? undefined : qaScene(current.scene, { name: scene });
   return {
@@ -677,7 +703,7 @@ export async function getCanvasContext(input = {}) {
 }
 
 export async function applyCanvasPatch(input = {}) {
-  const scene = normalizeSceneName(input.scene || input.name);
+  const scene = await resolveCanvasScene(input);
   const materializedLive = input.dryRun ? null : await materializeLiveScene(scene, input);
   const plan = input.plan || input.patch || input.operations || input.ops;
   const result = await patchSceneFile(scene, Array.isArray(plan) ? { ops: plan } : plan, {
@@ -709,7 +735,7 @@ export async function applyCanvasPatch(input = {}) {
 }
 
 export async function createCanvasView(input = {}) {
-  const scene = normalizeSceneName(input.scene || input.name || "codex-view.excalidraw");
+  const scene = await resolveCanvasScene(input, "codex-view.excalidraw");
   const parsedElements = parseElementInput(input);
   const restoreCheckpoint = parsedElements.find((element) => element?.type === "restoreCheckpoint");
   const deleteIds = deleteIdsFromPseudoElements(parsedElements);
@@ -840,7 +866,7 @@ export async function createCanvasView(input = {}) {
 }
 
 export async function createCanvasFromMermaid(input = {}) {
-  const scene = normalizeSceneName(input.scene || input.name || "mermaid-diagram.excalidraw");
+  const scene = await resolveCanvasScene(input, "mermaid-diagram.excalidraw");
   const definition = input.mermaidDiagram || input.mermaid || input.definition || input.source;
   const existed = await sceneExists(scene);
   const snapshot = input.snapshot === false || !existed ? null : await createSnapshot(scene, {
@@ -886,7 +912,7 @@ export async function createCanvasFromMermaid(input = {}) {
 }
 
 export async function restoreCanvasSnapshot(input = {}) {
-  const scene = normalizeSceneName(input.scene || input.name);
+  const scene = await resolveCanvasScene(input);
   const reference = input.from || input.snapshotName || input.checkpointId || "latest";
   const beforeSnapshot = input.snapshot === false ? null : await createSnapshot(scene, {
     label: input.label || "before-restore-snapshot"
@@ -915,7 +941,7 @@ export async function restoreCanvasSnapshot(input = {}) {
 }
 
 export async function exportCanvas(input = {}) {
-  const scene = normalizeSceneName(input.scene || input.name);
+  const scene = await resolveCanvasScene(input);
   if (input.materializeLive !== false) {
     await materializeLiveScene(scene, input);
   }
@@ -948,7 +974,7 @@ export async function exportCanvas(input = {}) {
 }
 
 export async function exportCanvasToExcalidrawUrl(input = {}) {
-  const scene = normalizeSceneName(input.scene || input.name);
+  const scene = await resolveCanvasScene(input);
   if (input.materializeLive !== false) {
     await materializeLiveScene(scene, input);
   }
@@ -970,7 +996,7 @@ export async function exportCanvasToExcalidrawUrl(input = {}) {
 }
 
 export async function reviewCanvas(input = {}) {
-  const scene = normalizeSceneName(input.scene || input.name);
+  const scene = await resolveCanvasScene(input);
   let materializedLive = null;
   if (input.materializeLive !== false) {
     materializedLive = await materializeLiveScene(scene, input);
@@ -1042,7 +1068,7 @@ export async function reviewCanvas(input = {}) {
 }
 
 export async function snapshotCanvas(input = {}) {
-  const scene = normalizeSceneName(input.scene || input.name);
+  const scene = await resolveCanvasScene(input);
   if (input.materializeLive !== false) {
     await materializeLiveScene(scene, input);
   }

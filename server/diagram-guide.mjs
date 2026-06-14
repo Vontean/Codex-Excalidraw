@@ -109,7 +109,8 @@ const GUIDES = {
       "Use color to separate meaning families, not as decoration. Keep contrast readable.",
       "Use installed libraries only when a reusable component communicates faster than primitives.",
       "Use cameraUpdate/checkpoint-style drawing to frame what the user should inspect.",
-      "Prefer bound connectors for structural relationships; mark annotation lines as annotation/guide roles when intentionally unbound."
+      "Prefer bound connectors for structural relationships; mark annotation lines as annotation/guide roles when intentionally unbound.",
+      "Use the configured default canvas background unless the user explicitly asks for another background."
     ],
     libraryHints: [
       "Basic UX/wireframing elements for product screens and UI primitives.",

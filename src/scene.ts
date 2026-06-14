@@ -2,14 +2,14 @@ import type { ExcalidrawScene } from "./types";
 
 export const SCENE_SOURCE = "https://codex.local/excalidraw-codex";
 
-export function createBlankScene(fontFamily = 6): ExcalidrawScene {
+export function createBlankScene(fontFamily = 6, backgroundColor?: string): ExcalidrawScene {
   return {
     type: "excalidraw",
     version: 2,
     source: SCENE_SOURCE,
     elements: [],
     appState: {
-      viewBackgroundColor: "#ffffff",
+      ...(backgroundColor ? { viewBackgroundColor: backgroundColor } : {}),
       gridSize: null,
       currentItemFontFamily: fontFamily
     },

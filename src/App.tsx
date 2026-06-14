@@ -6,6 +6,7 @@ import {
 import "@excalidraw/excalidraw/index.css";
 import {
   FolderOpen,
+  LoaderCircle,
   RefreshCw,
   Save,
   X
@@ -76,6 +77,10 @@ function normalizeFileName(value: string) {
   return trimmed.endsWith(".excalidraw") ? trimmed : `${trimmed}.excalidraw`;
 }
 
+function toDisplaySceneName(value: string) {
+  return normalizeFileName(value).replace(/\.excalidraw$/, "");
+}
+
 function normalizeLoadedScene(scene: ExcalidrawScene): ExcalidrawScene {
   const codex = scene.appState?.codex as { elementsKind?: string } | undefined;
   if (codex?.elementsKind === "skeleton") {
@@ -136,9 +141,11 @@ export default function App() {
   const localChangeAtRef = useRef(0);
   const suppressLiveSyncUntilRef = useRef(0);
   const [excalidrawApi, setExcalidrawApi] = useState<ExcalidrawApi | null>(null);
-  const [sceneName, setSceneName] = useState(FALLBACK_SCENE_NAME);
+  const [sceneName, setSceneName] = useState(toDisplaySceneName(FALLBACK_SCENE_NAME));
+  const [currentSceneName, setCurrentSceneName] = useState(FALLBACK_SCENE_NAME);
   const [scenes, setScenes] = useState<SceneSummary[]>([]);
   const [defaultFontFamily, setDefaultFontFamily] = useState(DEFAULT_FONT_FAMILY);
+  const [defaultCanvasBackgroundColor, setDefaultCanvasBackgroundColor] = useState<string | undefined>();
   const [installedLibraryItems, setInstalledLibraryItems] = useState<unknown[]>([]);
   const [initialData, setInitialData] = useState<InitialSceneData>(createBlankScene(DEFAULT_FONT_FAMILY));
   const [canvasKey, setCanvasKey] = useState(0);
@@ -146,7 +153,7 @@ export default function App() {
   const [, setStatusTone] = useState<"neutral" | "error">("neutral");
   const [isBusy, setIsBusy] = useState(false);
 
-  const activeSceneLabel = useMemo(() => normalizeFileName(sceneName), [sceneName]);
+  const activeSceneLabel = useMemo(() => normalizeFileName(currentSceneName), [currentSceneName]);
 
   const refreshScenes = useCallback(async () => {
     const response = await fetch("/api/scenes");
@@ -248,9 +255,43 @@ export default function App() {
     liveAppliedRevisionRef.current = live.revision;
   }, [applyRemoteLiveScene]);
 
+  const publishCurrentScene = useCallback(async (name: string) => {
+    await fetch("/api/current-scene", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        scene: normalizeFileName(name),
+        source: "workbench",
+        clientId: liveSyncClientIdRef.current
+      })
+    });
+  }, []);
+
+  const publishLiveScene = useCallback(async (name: string, scene: ExcalidrawScene) => {
+    const response = await fetch(`/api/live-scenes/${encodeURIComponent(name)}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        scene,
+        revision: `${Date.now()}-save`,
+        clientId: liveSyncClientIdRef.current,
+        source: "workbench"
+      })
+    });
+    if (!response.ok) {
+      throw new Error(`Unable to publish live canvas for ${name}`);
+    }
+    const live = (await response.json()) as LiveSceneResponse;
+    liveAppliedRevisionRef.current = live.revision;
+  }, []);
+
   const scheduleLiveSync = useCallback(
     (scene: ExcalidrawScene) => {
-      const targetName = normalizeFileName(sceneName);
+      const targetName = activeSceneLabel;
       if (liveSyncTimerRef.current) {
         clearTimeout(liveSyncTimerRef.current);
       }
@@ -261,7 +302,7 @@ export default function App() {
         });
       }, 650);
     },
-    [sceneName, syncLiveScene]
+    [activeSceneLabel, syncLiveScene]
   );
 
   const loadScene = useCallback(
@@ -272,11 +313,13 @@ export default function App() {
         const response = await fetch(`/api/scenes/${encodeURIComponent(targetName)}`);
         if (!response.ok) {
           if (response.status === 404) {
-            const blank = createBlankScene(defaultFontFamily);
+            const blank = createBlankScene(defaultFontFamily, defaultCanvasBackgroundColor);
             latestSceneRef.current = blank;
             liveAppliedRevisionRef.current = null;
             localChangeAtRef.current = 0;
-            setSceneName(targetName);
+            setSceneName(toDisplaySceneName(targetName));
+            setCurrentSceneName(targetName);
+            void publishCurrentScene(targetName);
             setInitialData(toInitialData(blank, false));
             setCanvasKey((value) => value + 1);
             setStatus(`Waiting for live canvas ${targetName}`);
@@ -290,7 +333,9 @@ export default function App() {
         latestSceneRef.current = scene;
         liveAppliedRevisionRef.current = null;
         localChangeAtRef.current = 0;
-        setSceneName(targetName);
+        setSceneName(toDisplaySceneName(targetName));
+        setCurrentSceneName(targetName);
+        void publishCurrentScene(targetName);
         setInitialData(toInitialData(scene, scene.elements.length > 0));
         setCanvasKey((value) => value + 1);
         setStatus(`Loaded ${targetName}`);
@@ -303,19 +348,28 @@ export default function App() {
         setIsBusy(false);
       }
     },
-    [defaultFontFamily]
+    [defaultCanvasBackgroundColor, defaultFontFamily, publishCurrentScene]
   );
+
+  useEffect(() => {
+    void publishCurrentScene(activeSceneLabel);
+  }, [activeSceneLabel, publishCurrentScene]);
 
   useEffect(() => {
     fetch("/api/health")
       .then(async (response) => {
         if (!response.ok) return;
-        const health = (await response.json()) as { defaultFontFamily?: number };
+        const health = (await response.json()) as {
+          defaultCanvasBackgroundColor?: string;
+          defaultFontFamily?: number;
+        };
+        const canvasBackgroundColor = health.defaultCanvasBackgroundColor || undefined;
+        setDefaultCanvasBackgroundColor(canvasBackgroundColor);
         if (Number.isFinite(Number(health.defaultFontFamily))) {
           const fontFamily = Number(health.defaultFontFamily);
           setDefaultFontFamily(fontFamily);
           if (!getSceneNameFromUrl()) {
-            const blank = createBlankScene(fontFamily);
+            const blank = createBlankScene(fontFamily, canvasBackgroundColor);
             latestSceneRef.current = blank;
             setInitialData(blank);
           }
@@ -425,44 +479,82 @@ export default function App() {
     };
   }, [excalidrawApi, installedLibraryItems]);
 
-  const saveScene = useCallback(async () => {
-    const targetName = normalizeFileName(sceneName);
-    setIsBusy(true);
-    try {
-      const response = await fetch(`/api/scenes/${encodeURIComponent(targetName)}`, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify(latestSceneRef.current)
-      });
-      if (!response.ok) {
-        throw new Error(`Unable to save ${targetName}`);
-      }
-      setSceneName(targetName);
-      window.history.replaceState(null, "", `/?scene=${encodeURIComponent(targetName)}`);
-      setStatus(`Saved ${targetName}; refreshing preview`);
-      setStatusTone("neutral");
+  const refreshSavedPreview = useCallback(
+    async (targetName: string, saveLabel: string) => {
       try {
         await refreshPreview(targetName);
-        setStatus(`Saved ${targetName}`);
+        setStatus(`${saveLabel} ${targetName}`);
         setStatusTone("neutral");
       } catch (previewError) {
         setStatus(
           previewError instanceof Error
-            ? `Saved ${targetName}; preview refresh failed: ${previewError.message}`
-            : `Saved ${targetName}; preview refresh failed`
+            ? `${saveLabel} ${targetName}; preview refresh failed: ${previewError.message}`
+            : `${saveLabel} ${targetName}; preview refresh failed`
         );
         setStatusTone("error");
+      } finally {
+        await refreshScenes().catch((error: unknown) => {
+          setStatus(error instanceof Error ? error.message : String(error));
+          setStatusTone("error");
+        });
       }
-      await refreshScenes();
+    },
+    [refreshScenes]
+  );
+
+  const saveScene = useCallback(async () => {
+    const sourceName = activeSceneLabel;
+    const targetName = normalizeFileName(sceneName);
+    setIsBusy(true);
+    try {
+      const isRename = sourceName !== targetName;
+      const response = isRename
+        ? await fetch(`/api/scenes/${encodeURIComponent(sourceName)}/rename`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+              to: targetName,
+              scene: latestSceneRef.current
+            })
+          })
+        : await fetch(`/api/scenes/${encodeURIComponent(targetName)}`, {
+            method: "PUT",
+            headers: {
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify(latestSceneRef.current)
+          });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { error?: string } | null;
+        throw new Error(payload?.error || `Unable to save ${targetName}`);
+      }
+      if (isRename) {
+        await fetch(`/api/live-scenes/${encodeURIComponent(sourceName)}`, {
+          method: "DELETE"
+        }).catch(() => undefined);
+      }
+      await publishLiveScene(targetName, latestSceneRef.current);
+      setSceneName(toDisplaySceneName(targetName));
+      setCurrentSceneName(targetName);
+      void publishCurrentScene(targetName);
+      window.history.replaceState(null, "", `/?scene=${encodeURIComponent(targetName)}`);
+      const saveLabel = isRename ? "Renamed and saved" : "Saved";
+      setStatus(`${saveLabel} ${targetName}`);
+      setStatusTone("neutral");
+      void refreshScenes().catch((error: unknown) => {
+        setStatus(error instanceof Error ? error.message : String(error));
+        setStatusTone("error");
+      });
+      void refreshSavedPreview(targetName, saveLabel);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : String(error));
       setStatusTone("error");
     } finally {
       setIsBusy(false);
     }
-  }, [refreshScenes, sceneName]);
+  }, [activeSceneLabel, publishCurrentScene, publishLiveScene, refreshSavedPreview, refreshScenes, sceneName]);
 
   const deleteScene = useCallback(
     async (name: string) => {
@@ -489,9 +581,11 @@ export default function App() {
           if (nextScene) {
             await loadScene(nextScene.name);
           } else {
-            const blank = createBlankScene(defaultFontFamily);
+            const blank = createBlankScene(defaultFontFamily, defaultCanvasBackgroundColor);
             latestSceneRef.current = blank;
-            setSceneName(FALLBACK_SCENE_NAME);
+            setSceneName(toDisplaySceneName(FALLBACK_SCENE_NAME));
+            setCurrentSceneName(FALLBACK_SCENE_NAME);
+            void publishCurrentScene(FALLBACK_SCENE_NAME);
             setInitialData(blank);
             setCanvasKey((value) => value + 1);
             window.history.replaceState(null, "", "/");
@@ -506,10 +600,13 @@ export default function App() {
         setIsBusy(false);
       }
     },
-    [activeSceneLabel, defaultFontFamily, loadScene, refreshScenes, scenes]
+    [activeSceneLabel, defaultCanvasBackgroundColor, defaultFontFamily, loadScene, refreshScenes, scenes]
   );
 
-  const blankScene = useMemo(() => createBlankScene(defaultFontFamily), [defaultFontFamily]);
+  const blankScene = useMemo(
+    () => createBlankScene(defaultFontFamily, defaultCanvasBackgroundColor),
+    [defaultCanvasBackgroundColor, defaultFontFamily]
+  );
 
   return (
     <main className="flex h-screen w-screen flex-col overflow-hidden bg-white text-ink">
@@ -568,8 +665,14 @@ export default function App() {
             aria-label="Scene file"
           />
           <button className="codex-save-button" type="button" onClick={() => void saveScene()} disabled={isBusy}>
-            <Save size={14} />
-            Save
+            {isBusy ? (
+              <LoaderCircle aria-label="Saving" className="animate-spin" size={15} />
+            ) : (
+              <>
+                <Save size={14} />
+                Save
+              </>
+            )}
           </button>
         </div>
 

@@ -43,11 +43,15 @@ async function runExport() {
   }
 
   const scene = (await response.json()) as ExcalidrawScene;
+  const healthResponse = await fetch("/api/health");
+  const health = healthResponse.ok
+    ? await healthResponse.json() as { defaultCanvasBackgroundColor?: string }
+    : {};
   const elements = normalizeElements(scene);
   const appState = {
     ...(scene.appState ?? {}),
     exportBackground: true,
-    viewBackgroundColor: scene.appState?.viewBackgroundColor ?? "#ffffff"
+    viewBackgroundColor: scene.appState?.viewBackgroundColor ?? health.defaultCanvasBackgroundColor
   };
   delete (appState as Record<string, unknown>).collaborators;
 
