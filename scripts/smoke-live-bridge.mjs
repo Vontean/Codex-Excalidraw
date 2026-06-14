@@ -75,6 +75,24 @@ async function waitForNodeLiveScene() {
   throw new Error(`Timed out waiting for Node live scene payload: ${JSON.stringify(lastState)}`);
 }
 
+async function waitForLiveSceneSource(sceneName, allowedSources) {
+  const expected = new Set(allowedSources);
+  const deadline = Date.now() + 8000;
+  let lastState = null;
+  while (Date.now() < deadline) {
+    const response = await fetch(`${baseUrl}api/live-scenes/${sceneName}?includeScene=true`);
+    if (response.ok) {
+      const live = await response.json();
+      lastState = live;
+      if (expected.has(live?.source)) {
+        return live;
+      }
+    }
+    await sleep(150);
+  }
+  throw new Error(`Timed out waiting for live scene source ${allowedSources.join("/")}: ${JSON.stringify(lastState)}`);
+}
+
 function textElement(id, text, x, y) {
   return {
     id,
@@ -176,7 +194,7 @@ async function main() {
       throw new Error(`MCP patch refreshed a preview during a stage write: ${JSON.stringify(patchResult.preview)}`);
     }
 
-    await page.waitForFunction(() => document.body.innerText.includes("Canvas updated from Codex"), null, { timeout: 8000 });
+    await waitForLiveSceneSource(scene, ["mcp"]);
     const previewBeforeExport = await page.evaluate((sceneName) => {
       const pngName = sceneName.replace(/\.excalidraw$/, ".png");
       return Array.from(document.querySelectorAll(".gallery-preview img")).some((image) =>
@@ -194,7 +212,7 @@ async function main() {
     if (!patchExport.exports?.[0]?.size) {
       throw new Error(`export_canvas did not create a final PNG preview: ${JSON.stringify(patchExport)}`);
     }
-    await page.waitForFunction(() => document.body.innerText.includes("Preview updated"), null, { timeout: 8000 });
+    await waitForLiveSceneSource(scene, ["mcp-export"]);
     await page.waitForFunction((sceneName) => {
       const pngName = sceneName.replace(/\.excalidraw$/, ".png");
       return Array.from(document.querySelectorAll(".gallery-preview img")).some((image) =>
@@ -236,7 +254,7 @@ async function main() {
     if (missingView.preview !== undefined) {
       throw new Error(`create_view refreshed a preview during a stage write: ${JSON.stringify(missingView.preview)}`);
     }
-    await page.waitForFunction(() => document.body.innerText.includes("Canvas updated from Codex"), null, { timeout: 8000 });
+    await waitForLiveSceneSource(missingFirstScene, ["mcp"]);
     const missingLiveResponse = await fetch(`${baseUrl}api/live-scenes/${missingFirstScene}?includeScene=true`);
     const missingLive = await missingLiveResponse.json();
     if (missingLive.source !== "mcp" || missingLive.activeElementCount !== 1) {

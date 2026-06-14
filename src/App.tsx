@@ -142,8 +142,8 @@ export default function App() {
   const [installedLibraryItems, setInstalledLibraryItems] = useState<unknown[]>([]);
   const [initialData, setInitialData] = useState<InitialSceneData>(createBlankScene(DEFAULT_FONT_FAMILY));
   const [canvasKey, setCanvasKey] = useState(0);
-  const [status, setStatus] = useState("Ready");
-  const [statusTone, setStatusTone] = useState<"neutral" | "error">("neutral");
+  const [, setStatus] = useState("Ready");
+  const [, setStatusTone] = useState<"neutral" | "error">("neutral");
   const [isBusy, setIsBusy] = useState(false);
 
   const activeSceneLabel = useMemo(() => normalizeFileName(sceneName), [sceneName]);
@@ -571,9 +571,6 @@ export default function App() {
             <Save size={14} />
             Save
           </button>
-          <p className={`codex-status ${statusTone === "error" ? "error" : ""}`} title={status}>
-            {status}
-          </p>
         </div>
 
         <section className="codex-gallery-scroll" aria-label="Generated scenes">
