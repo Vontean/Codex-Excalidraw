@@ -31,6 +31,11 @@ import {
   writeScene
 } from "./scene-workspace.mjs";
 import {
+  hasValidLinearPoints,
+  normalizeLinearElement,
+  normalizeSceneLinearElements
+} from "./scene-normalize.mjs";
+import {
   inspectRegisteredLibrary,
   librariesDir,
   listInstalledLibraryItems,
@@ -484,6 +489,15 @@ function detectLayoutIssues(elements, options = {}) {
   }
 
   for (const element of elements.filter((item) => item.type === "arrow" || item.type === "line")) {
+    if (!hasValidLinearPoints(element.points)) {
+      issues.push({
+        type: "invalid-linear-element",
+        severity: "error",
+        elementId: element.id,
+        message: `${element.type} requires a points array with at least two [x, y] tuples.`
+      });
+      continue;
+    }
     if (!connectionStartId(element) || !connectionEndId(element)) {
       if (element?.customData?.codexRole === "guide-arrow" || element?.customData?.codexRole === "annotation-line") continue;
       issues.push({
@@ -691,12 +705,14 @@ function defaultElement(input = {}) {
     };
   }
 
-  return {
+  const next = {
     ...element,
     ...input,
     id: input.id || element.id,
     type
   };
+  normalizeLinearElement(next);
+  return next;
 }
 
 function createConnector(scene, operation) {
@@ -952,6 +968,11 @@ function applyPatchPlan(scene, plan, options = {}) {
     }
 
     throw new Error(`Unsupported patch op: ${op}`);
+  }
+
+  const normalizedLinearElements = normalizeSceneLinearElements(nextScene);
+  if (normalizedLinearElements) {
+    report.push({ op: "normalize-linear-elements", matched: normalizedLinearElements });
   }
 
   const refreshedConnectors = options.refreshConnectors === false ? 0 : refreshConnectorGeometry(nextScene);

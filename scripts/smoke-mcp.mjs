@@ -2,7 +2,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { deleteScene, readScene } from "../server/scene-workspace.mjs";
-import { startServer } from "../server/server.mjs";
+import { qaScene, startServer } from "../server/server.mjs";
 
 const scene = "smoke-mcp-workflow.excalidraw";
 const mermaidScene = "smoke-mcp-mermaid.excalidraw";
@@ -129,7 +129,9 @@ async function main() {
           { type: "cameraUpdate", x: 40, y: 40, width: 900, height: 620 },
           { id: "smoke-title", type: "text", x: 80, y: 80, width: 480, height: 44, text: "MCP workflow smoke", fontSize: 32 },
           { id: "smoke-board", type: "rectangle", x: 80, y: 160, width: 420, height: 140, backgroundColor: "#e7f5ff", customData: { codexRole: "focus" } },
-          { id: "smoke-label", type: "text", x: 110, y: 205, width: 340, height: 32, text: "Intent-first public tools", fontSize: 22 }
+          { id: "smoke-label", type: "text", x: 110, y: 205, width: 340, height: 32, text: "Intent-first public tools", fontSize: 22 },
+          { id: "smoke-arrow-without-points", type: "arrow", x: 540, y: 190, width: 80, height: 0, strokeColor: "#64748B", customData: { codexRole: "guide-arrow" } },
+          { id: "smoke-line-without-points", type: "line", x: 540, y: 230, width: 80, height: 20, strokeColor: "#64748B", customData: { codexRole: "annotation-line" } }
         ]
       }
     }));
@@ -146,6 +148,12 @@ async function main() {
     if (!createdScene.appState?.codex?.finalViewport || !createdScene.appState?.zoom?.value) {
       throw new Error("create_view did not translate cameraUpdate into viewport appState.");
     }
+    for (const id of ["smoke-arrow-without-points", "smoke-line-without-points"]) {
+      const element = createdScene.elements.find((item) => item.id === id);
+      if (!Array.isArray(element?.points) || element.points.length < 2) {
+        throw new Error(`create_view did not normalize linear element points for ${id}.`);
+      }
+    }
 
     const context = parseToolPayload(await client.callTool({ name: "get_canvas_context", arguments: { scene } }));
     if (context.source !== "live" || !JSON.stringify(context).includes("Intent-first public tools")) {
@@ -161,7 +169,8 @@ async function main() {
           {
             op: "add",
             elements: [
-              { id: "smoke-note", type: "text", x: 80, y: 350, width: 560, height: 32, text: "Semantic patch keeps the workflow small.", fontSize: 22 }
+              { id: "smoke-note", type: "text", x: 80, y: 350, width: 560, height: 32, text: "Semantic patch keeps the workflow small.", fontSize: 22 },
+              { id: "smoke-patch-line-without-points", type: "line", x: 80, y: 410, width: 560, height: 0, strokeColor: "#94A3B8", customData: { codexRole: "annotation-line" } }
             ]
           }
         ]
@@ -172,6 +181,38 @@ async function main() {
     }
     if (patch.preview !== undefined) {
       throw new Error(`apply_canvas_patch refreshed a preview during a stage write: ${JSON.stringify(patch.preview)}`);
+    }
+    const patchedScene = await readScene(scene);
+    const patchLine = patchedScene.elements.find((item) => item.id === "smoke-patch-line-without-points");
+    if (!Array.isArray(patchLine?.points) || patchLine.points.length < 2) {
+      throw new Error("apply_canvas_patch add did not normalize line points.");
+    }
+    await client.callTool({
+      name: "apply_canvas_patch",
+      arguments: {
+        scene,
+        operations: [
+          { op: "update", id: "smoke-arrow-without-points", props: { points: null }, width: 120, height: 24 }
+        ]
+      }
+    });
+    const updatedScene = await readScene(scene);
+    const updatedArrow = updatedScene.elements.find((item) => item.id === "smoke-arrow-without-points");
+    if (!Array.isArray(updatedArrow?.points) || updatedArrow.points.length < 2) {
+      throw new Error("apply_canvas_patch update did not repair missing arrow points.");
+    }
+    const invalidLinearQa = qaScene({
+      type: "excalidraw",
+      version: 2,
+      source: "smoke",
+      elements: [
+        { id: "invalid-arrow", type: "arrow", x: 0, y: 0, width: 20, height: 0, isDeleted: false }
+      ],
+      appState: {},
+      files: {}
+    }, { name: "invalid-linear-smoke.excalidraw" });
+    if (invalidLinearQa.ok || !invalidLinearQa.issues.some((issue) => issue.type === "invalid-linear-element")) {
+      throw new Error("qa did not report missing linear element points as blocking.");
     }
 
     const review = await client.callTool({ name: "review_canvas", arguments: { scene } });

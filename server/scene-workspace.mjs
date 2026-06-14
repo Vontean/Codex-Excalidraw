@@ -5,6 +5,7 @@ import {
   snapshotRetentionLimit,
   snapshotsDir
 } from "./config.mjs";
+import { normalizeSceneLinearElements } from "./scene-normalize.mjs";
 
 export function normalizeSceneName(input) {
   const basename = path.basename(String(input || "untitled.excalidraw"));
@@ -83,6 +84,7 @@ export async function readScene(name) {
 export async function writeScene(name, scene) {
   await ensureArtifactsDir();
   const fileName = normalizeSceneName(name);
+  normalizeSceneLinearElements(scene);
   await fs.writeFile(scenePath(fileName), `${JSON.stringify(scene, null, 2)}\n`, "utf8");
   return fileName;
 }
